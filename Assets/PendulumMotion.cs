@@ -1,15 +1,18 @@
-using UnityEngine;
+﻿using UnityEngine;
 
 public class PendulumMotion : MonoBehaviour
 {
     public Transform pivot;
-
-    public float length = 2f;
-    public float gravity = 9.81f;
-    public float angle = 45f;
-
-    private float angularVelocity = 0f;
+    public Transform paintOutlet;
+    public float fluidHeight = 0.5f;
+    public float length = 2f;          // L
+    public float gravity = 9.81f;      // g
+    public float maxAngle = 30f;       // θmax (degrees)
+    public float mass = 1f;            // m
+    public float dampingCoefficient = 0.15f; // b
+    private Vector3 lastOutletPosition;
     private LineRenderer line;
+    private float timeElapsed = 0f;
 
     void Start()
     {
@@ -19,24 +22,73 @@ public class PendulumMotion : MonoBehaviour
 
     void Update()
     {
-        float angleRad = angle * Mathf.Deg2Rad;
+        timeElapsed += Time.deltaTime;
+        
+       
+        float thetaMaxRad = maxAngle * Mathf.Deg2Rad;
+
+        float omega = Mathf.Sqrt(gravity / length);
+
+        float k = dampingCoefficient / mass;
+
+        float theta =
+            thetaMaxRad *
+            Mathf.Exp(-k * timeElapsed) *
+            Mathf.Cos(omega * timeElapsed);
+
+        float angularVelocity =
+            -thetaMaxRad * Mathf.Exp(-k * timeElapsed) *
+            (omega * Mathf.Sin(omega * timeElapsed) + k * Mathf.Cos(omega * timeElapsed));
 
         float angularAcceleration =
-            -(gravity / length) * Mathf.Sin(angleRad);
+            -omega * omega * theta;
 
-        angularVelocity += angularAcceleration * Time.deltaTime;
-
-        angle += angularVelocity * Time.deltaTime;
-
-        float x = pivot.position.x +
-                  length * Mathf.Sin(angleRad);
-
-        float y = pivot.position.y -
-                  length * Mathf.Cos(angleRad);
+        float x = pivot.position.x + length * Mathf.Sin(theta);
+        float y = pivot.position.y - length * Mathf.Cos(theta);
 
         transform.position = new Vector3(x, y, 0);
 
+        transform.up = (pivot.position - transform.position).normalized;
+
         line.SetPosition(0, pivot.position);
         line.SetPosition(1, transform.position);
+
+
+        // اتجاه خروج الطلاء
+        Vector3 outletDirection = -paintOutlet.up;
+        float fluidSpeed = Mathf.Sqrt(2 * gravity * fluidHeight);
+
+        Vector3 fluidVelocity = outletDirection * fluidSpeed;
+
+        Vector3 outletVelocity =
+            (paintOutlet.position - lastOutletPosition) / Time.deltaTime;
+
+        lastOutletPosition = paintOutlet.position;
+
+        Vector3 totalVelocity = fluidVelocity + outletVelocity;
+
+        // رسم مسار الطلاء
+        float boardY = 0f; // ارتفاع اللوحة
+
+        for (int i = 0; i < 40; i++)
+        {
+            float t = i * 0.05f;
+
+            Vector3 point =
+                paintOutlet.position +
+                totalVelocity * t +
+                0.5f * Physics.gravity * t * t;
+
+            // رسم المسار
+            Debug.DrawLine(point, point + Vector3.up * 0.02f, Color.blue);
+
+            // 🔴 تحقق من الاصطدام مع اللوحة
+            if (point.y <= boardY)
+            {
+                Debug.DrawRay(point, Vector3.up * 0.2f, Color.green);
+
+                break;
+            }
+        }
     }
 }
