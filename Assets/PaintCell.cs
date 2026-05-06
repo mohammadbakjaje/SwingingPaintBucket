@@ -1,4 +1,4 @@
-using UnityEngine;
+﻿using UnityEngine;
 
 public class PaintCell
 {
@@ -6,4 +6,6 @@ public class PaintCell
     public float paintAmount;
     public Color color;
     public bool painted;
+
+    public GameObject cellObject; // 🔴 هذا السطر مهم جداً
 }

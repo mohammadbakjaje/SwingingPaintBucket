@@ -13,7 +13,9 @@ public class PendulumMotion : MonoBehaviour
     private Vector3 lastOutletPosition;
     private LineRenderer line;
     private float timeElapsed = 0f;
-
+    public PaintGrid paintGrid;
+    float paintTimer = 0f;
+    public float paintInterval = 0.05f;
     void Start()
     {
         line = GetComponent<LineRenderer>();
@@ -23,8 +25,8 @@ public class PendulumMotion : MonoBehaviour
     void Update()
     {
         timeElapsed += Time.deltaTime;
-        
-       
+
+
         float thetaMaxRad = maxAngle * Mathf.Deg2Rad;
 
         float omega = Mathf.Sqrt(gravity / length);
@@ -83,10 +85,43 @@ public class PendulumMotion : MonoBehaviour
             Debug.DrawLine(point, point + Vector3.up * 0.02f, Color.blue);
 
             // 🔴 تحقق من الاصطدام مع اللوحة
+            // 🔴 تحقق من الاصطدام مع اللوحة
             if (point.y <= boardY)
             {
-                Debug.DrawRay(point, Vector3.up * 0.2f, Color.green);
+                paintTimer += Time.deltaTime;
 
+                if (paintTimer >= paintInterval)
+                {
+                    float speed = totalVelocity.magnitude;
+                    float radius = Mathf.Clamp(speed * 0.02f, 0.1f, 0.5f);
+
+                    int sprayCount = 5;
+
+                    for (int s = 0; s < sprayCount; s++)
+                    {
+                        Vector3 randomDir =
+                            outletDirection +
+                            Random.insideUnitSphere * 0.2f;
+
+                        randomDir.Normalize();
+
+                        Vector3 sprayVelocity =
+                            randomDir * speed;
+
+                        float t2 = 0.1f;
+
+                        Vector3 sprayPoint =
+                            paintOutlet.position +
+                            sprayVelocity * t2 +
+                            0.5f * Physics.gravity * t2 * t2;
+
+                        paintGrid.PaintAtPoint(sprayPoint, radius, speed);
+                    }
+
+                    paintTimer = 0f;
+                }
+
+                // 🔴 يجب أن يكون هنا
                 break;
             }
         }

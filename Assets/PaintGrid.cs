@@ -13,6 +13,74 @@ public class PaintGrid : MonoBehaviour
     {
         GenerateGrid();
     }
+    public PaintCell GetCellFromWorldPosition(Vector3 worldPos)
+    {
+        // تحويل النقطة إلى local بالنسبة للوحة
+        Vector3 localPos = worldPos - transform.position;
+
+        int x = Mathf.FloorToInt(localPos.x / cellSize);
+        int y = Mathf.FloorToInt(localPos.z / cellSize);
+
+        // تحقق من الحدود
+        if (x < 0 || x >= rows || y < 0 || y >= cols)
+            return null;
+
+        return grid[x, y];
+    }
+
+
+    public void PaintAtPoint(Vector3 worldPos, float radius, float currentSpeed)
+    {
+        Vector3 localPos = worldPos - transform.position;
+
+        int centerX = Mathf.FloorToInt(localPos.x / cellSize);
+        int centerY = Mathf.FloorToInt(localPos.z / cellSize);
+
+        int range = Mathf.CeilToInt(radius / cellSize);
+
+        for (int x = centerX - range; x <= centerX + range; x++)
+        {
+            for (int y = centerY - range; y <= centerY + range; y++)
+            {
+                if (x < 0 || x >= rows || y < 0 || y >= cols)
+                    continue;
+
+                PaintCell cell = grid[x, y];
+
+                float dist = Vector2.Distance(
+                    new Vector2(x, y),
+                    new Vector2(centerX, centerY)
+                );
+
+                if (dist <= range)
+                {
+                    float strength = 1f - (dist / range);
+
+                    ApplyPaint(cell, strength, currentSpeed);
+                }
+            }
+        }
+    }
+
+
+    void ApplyPaint(PaintCell cell, float strength, float speed)
+    {
+        cell.paintAmount += strength * speed * 0.05f;
+
+        float intensity = Mathf.Clamp01(cell.paintAmount);
+
+        float speedFactor = Mathf.Clamp01(speed * 0.1f);
+
+        float finalValue = intensity * speedFactor;
+
+        Color color = Color.Lerp(Color.white, Color.red, finalValue);
+
+        if (cell.cellObject != null)
+        {
+            Renderer renderer = cell.cellObject.GetComponent<Renderer>();
+            renderer.material.color = color;
+        }
+    }
 
     void GenerateGrid()
     {
@@ -39,7 +107,7 @@ public class PaintGrid : MonoBehaviour
                 cell.paintAmount = 0f;
                 cell.color = Color.white;
                 cell.painted = false;
-
+                cell.cellObject = cellObject;
                 Renderer renderer = cellObject.GetComponent<Renderer>();
                 renderer.material.color = Color.white;
 
