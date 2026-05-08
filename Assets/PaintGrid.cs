@@ -6,7 +6,7 @@ public class PaintGrid : MonoBehaviour
     public int cols = 20;
 
     public float cellSize = 0.2f;
-
+    public Color currentPaintColor = Color.red;
     private PaintCell[,] grid;
 
     void Start()
@@ -63,22 +63,19 @@ public class PaintGrid : MonoBehaviour
     }
 
 
-    void ApplyPaint(PaintCell cell, float strength, float speed)
+    void ApplyPaint(PaintCell cell, float strength, float intensity)
     {
-        cell.paintAmount += strength * speed * 0.05f;
+        // أضفنا عامل 'intensity' للتحكم بقوة الرشة (المركزية غامقة والطرطشة فاتحة)
+        float addedPaint = strength * intensity * Time.deltaTime * 10.0f;
 
-        float intensity = Mathf.Clamp01(cell.paintAmount);
+        cell.paintAmount += addedPaint;
+        cell.paintAmount = Mathf.Clamp01(cell.paintAmount);
 
-        float speedFactor = Mathf.Clamp01(speed * 0.1f);
-
-        float finalValue = intensity * speedFactor;
-
-        Color color = Color.Lerp(Color.white, Color.red, finalValue);
+        Color finalColor = Color.Lerp(Color.white, currentPaintColor, cell.paintAmount);
 
         if (cell.cellObject != null)
         {
-            Renderer renderer = cell.cellObject.GetComponent<Renderer>();
-            renderer.material.color = color;
+            cell.cellObject.GetComponent<Renderer>().material.color = finalColor;
         }
     }
 
