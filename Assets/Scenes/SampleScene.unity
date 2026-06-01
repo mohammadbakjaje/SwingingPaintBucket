@@ -151,28 +151,29 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 16f5237d5246cf84eab1288205803c3f, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::PendulumMotion
+  bucketHandle: {fileID: 2024198033}
+  ropeMaterial: {fileID: 2100000, guid: 1c8dd743b535dce43907360523581d1d, type: 2}
+  ropeSegments: 20
+  ropeWidth: 0.1
+  initialFillAmount: 1
   pivot: {fileID: 1604007082}
-  paintOutlet: {fileID: 93372988}
-  fluidHeight: 2
-  length: 2
+  length: 4
   gravity: 9.81
   maxAngle: 60
   mass: 1
   dampingCoefficient: 0.08
   paintGrid: {fileID: 2059319588}
-  paintInterval: 0.05
-  paintLiquid: {fileID: 228911975}
+  paintOutlet: {fileID: 93372988}
+  paintColor: {r: 1, g: 0, b: 0.19373989, a: 1}
+  paintDrainRate: 0.01
   maxPaintLevel: 0.2
   currentPaintLevel: 0.2
-  paintDrainRate: 0.01
-  liquidTiltAmount: 15
-  liquidSmoothness: 5
+  paintLiquid: {fileID: 228911975}
   liquidRenderer: {fileID: 228911970}
   emptyLevelY: -0.349
   fullLevelY: 0.377
   scaleAtFull: {x: 0.7200003, y: 0.04000001, z: 0.7200003}
   scaleAtEmpty: {x: 0.55, y: 0.04000001, z: 0.55}
-  paintColor: {r: 0.15044165, g: 0, b: 1, a: 1}
 --- !u!23 &62080842
 MeshRenderer:
   m_ObjectHideFlags: 0
@@ -6207,11 +6208,42 @@ Transform:
   m_GameObject: {fileID: 1604007081}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 3, z: -0}
+  m_LocalPosition: {x: 0, y: 7, z: -0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &2024198032
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 2024198033}
+  m_Layer: 0
+  m_Name: handlepoint
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &2024198033
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2024198032}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0.0005, y: 0.00031, z: 0.02624}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 1212400504}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1001 &2024339529
 PrefabInstance:
@@ -6287,7 +6319,10 @@ PrefabInstance:
       objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
-    m_AddedGameObjects: []
+    m_AddedGameObjects:
+    - targetCorrespondingSourceObject: {fileID: -8679921383154817045, guid: f091cb134a38e724599913f64ef89fbc, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 2024198033}
     m_AddedComponents:
     - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: f091cb134a38e724599913f64ef89fbc, type: 3}
       insertIndex: -1
@@ -6322,9 +6357,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 2535911e4bc8f114484b6da9af189ce8, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::PaintGrid
-  rows: 20
-  cols: 20
-  cellSize: 0.2
+  rows: 40
+  cols: 40
+  cellSize: 0.1
   currentPaintColor: {r: 1, g: 0, b: 0, a: 1}
 --- !u!4 &2059319589
 Transform:
