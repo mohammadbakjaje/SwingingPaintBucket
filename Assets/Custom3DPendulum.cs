@@ -8,6 +8,10 @@ public class Custom3DPendulum : MonoBehaviour
     [SerializeField] private float initialLength = 3.0f;
     [SerializeField] private float mass = 1.0f;
 
+    [Header("Blackburn Pendulum")]
+    [SerializeField] private float lengthX = 3.0f;
+    [SerializeField] private float lengthZ = 4.0f;
+
     [Header("Environmental Forces")]
     [SerializeField] private float gravityConstant = 9.81f;
     [SerializeField] private float baseDragCoefficient = 0.1f;
@@ -20,7 +24,7 @@ public class Custom3DPendulum : MonoBehaviour
     [SerializeField] private float springDamping = 4f;
 
     [Header("Initial Launch Force (Impulse)")]
-    [SerializeField] private Vector3 initialForce = new Vector3(6f, 0f, 4f);
+    [SerializeField] private Vector3 initialForce = new Vector3(8f, 0f, 6f);
 
     [Header("Paint Settings")]
     [SerializeField] private Color paintColor = Color.red;
@@ -48,6 +52,7 @@ public class Custom3DPendulum : MonoBehaviour
 
     private void Start()
     {
+        Debug.Log("Custom3DPendulum: Start running.");
         if (pivotTransform == null)
         {
             Debug.LogError("Custom3DPendulum: pivotTransform must be assigned.");
@@ -88,7 +93,15 @@ public class Custom3DPendulum : MonoBehaviour
         float totalDragCoefficient = baseDragCoefficient + (airHumidity * humidityEffectFactor);
         Vector3 dragForce = -totalDragCoefficient * currentVelocity;
 
-        Vector3 totalForce = gravityForce + dragForce;
+        float safeLengthX = Mathf.Max(0.01f, lengthX);
+        float safeLengthZ = Mathf.Max(0.01f, lengthZ);
+        Vector3 asymmetricRestore = new Vector3(
+            -displacement.x * gravityConstant / safeLengthX,
+            0f,
+            -displacement.z * gravityConstant / safeLengthZ
+        );
+
+        Vector3 totalForce = gravityForce + dragForce + asymmetricRestore;
 
         if (useElasticity)
         {
@@ -212,13 +225,6 @@ public class Custom3DPendulum : MonoBehaviour
         return pivotTransform.InverseTransformPoint(transform.position);
     }
 
-    private void OnValidate()
-    {
-        initialLength = Mathf.Max(0.01f, initialLength);
-        mass = Mathf.Max(0.0001f, mass);
-        ropeSegments = Mathf.Clamp(ropeSegments, 2, 256);
-    }
-
     private void OnDrawGizmosSelected()
     {
         if (pivotTransform == null) return;
@@ -227,5 +233,14 @@ public class Custom3DPendulum : MonoBehaviour
         Gizmos.DrawSphere(pivotTransform.position, 0.03f);
         Gizmos.color = Color.cyan;
         Gizmos.DrawSphere(transform.position, 0.05f);
+    }
+
+    private void OnValidate()
+    {
+        initialLength = Mathf.Max(0.01f, initialLength);
+        mass = Mathf.Max(0.0001f, mass);
+        ropeSegments = Mathf.Clamp(ropeSegments, 2, 256);
+        lengthX = Mathf.Max(0.01f, lengthX);
+        lengthZ = Mathf.Max(0.01f, lengthZ);
     }
 }
