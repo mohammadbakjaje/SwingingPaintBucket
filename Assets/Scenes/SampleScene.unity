@@ -130,8 +130,8 @@ GameObject:
   - component: {fileID: 62080844}
   - component: {fileID: 62080843}
   - component: {fileID: 62080842}
-  - component: {fileID: 62080840}
   - component: {fileID: 62080845}
+  - component: {fileID: 62080846}
   m_Layer: 0
   m_Name: Buket
   m_TagString: Untagged
@@ -139,42 +139,6 @@ GameObject:
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
   m_IsActive: 1
---- !u!114 &62080840
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 62080839}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 16f5237d5246cf84eab1288205803c3f, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::PendulumMotion
-  bucketHandle: {fileID: 2024198033}
-  ropeMaterial: {fileID: 2100000, guid: 1c8dd743b535dce43907360523581d1d, type: 2}
-  ropeSegments: 20
-  ropeWidth: 0.1
-  initialFillAmount: 1
-  pivot: {fileID: 1604007082}
-  length: 4
-  gravity: 9.81
-  maxAngle: 60
-  mass: 1
-  dampingCoefficient: 0.08
-  paintGrid: {fileID: 2059319588}
-  paintOutlet: {fileID: 93372988}
-  paintColor: {r: 1, g: 0, b: 0.19373989, a: 1}
-  paintDrainRate: 0.01
-  maxPaintLevel: 0.2
-  currentPaintLevel: 0.2
-  paintLiquid: {fileID: 228911975}
-  liquidRenderer: {fileID: 228911970}
-  emptyLevelY: -0.349
-  fullLevelY: 0.377
-  scaleAtFull: {x: 0.7200003, y: 0.04000001, z: 0.7200003}
-  scaleAtEmpty: {x: 0.55, y: 0.04000001, z: 0.55}
---- !u!23 &62080842
 MeshRenderer:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -359,6 +323,40 @@ LineRenderer:
   m_UseWorldSpace: 1
   m_Loop: 0
   m_ApplyActiveColorSpace: 1
+--- !u!114 &62080846
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 62080839}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 0c113b22ab5c4e73bdff211b27d2d1d4, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Custom3DPendulum
+  pivotTransform: {fileID: 1604007082}
+  initialLength: 4
+  mass: 1
+  gravityConstant: 9.81
+  baseDragCoefficient: 0.1
+  airHumidity: 0.5
+  humidityEffectFactor: 0.2
+  useElasticity: 0
+  springConstant: 400
+  springDamping: 4
+  initialForce: {x: 6, y: 0, z: 4}
+  paintColor: {r: 1, g: 0, b: 0, a: 1}
+  paintViscosity: 0.5
+  paintOutlet: {fileID: 93372988}
+  paintDrainRate: 0.01
+  maxPaintLevel: 0.2
+  currentPaintLevel: 0.2
+  splatterInterval: 0.05
+  ropeMaterial: {fileID: 2100000, guid: 1c8dd743b535dce43907360523581d1d, type: 2}
+  ropeSegments: 20
+  ropeWidth: 0.05
+  sagAmount: 0.3
 --- !u!1 &93372987
 GameObject:
   m_ObjectHideFlags: 0
