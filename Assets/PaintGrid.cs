@@ -6,166 +6,146 @@ using UnityEngine;
 /// </summary>
 public class PaintGrid : MonoBehaviour
 {
-    [Header("Grid")]
-    public int rows = 20;
-    public int cols = 20;
-    public float cellSize = 0.2f;
+    public Color currentPaintColor = Color.red;
 
-    [Header("Canvas Plane Settings")]
-    [SerializeField] private float canvasYHeight = 0.0f;
-    [SerializeField] private float canvasWidth = 10f;
-    [SerializeField] private float canvasHeight = 10f;
+    [Header("Texture Settings")]
+    public int textureWidth = 1024;
+    public int textureHeight = 1024;
+    public Color clearColor = Color.white;
 
-    [Header("Splatter Tuning")]
-    [SerializeField] private float baseRadiusFactor = 0.05f;
+    private Texture2D dynamicTexture;
+    private Color32[] pixelData;
+    private Renderer quadRenderer;
+    private bool needsApply = false;
 
-    [Header("Visuals")]
-    [SerializeField] private Color defaultCellColor = Color.white;
-
-    private PaintCell[,] grid;
-    private MaterialPropertyBlock mpb;
-
-    private void Awake()
+    // دالة تهيئة أولية: تنفذ مرة واحدة عند بدء تشغيل اللعبة
+    // هنا نحذف أي كوليدر موجود على الكواد، ننشئ التكتشر في الذاكرة، ثم نربطها بالماتيريال
+    void Start()
     {
-        mpb = new MaterialPropertyBlock();
-        GenerateGrid();
+        RemoveColliderFromQuad();
+        CreateDynamicTexture();
+        ApplyTextureToQuad();
     }
 
-    private void OnEnable()
+    // دالة تحديث نهاية الإطار: تطبق التغييرات على التكتشر مرة واحدة في نهاية كل فريم
+    void LateUpdate()
     {
-        PhysicsEvents.OnPaintSplatter += HandlePaintSplatter;
-    }
-
-    private void OnDisable()
-    {
-        PhysicsEvents.OnPaintSplatter -= HandlePaintSplatter;
-    }
-
-    public PaintCell GetCellFromWorldPosition(Vector3 worldPos)
-    {
-        Vector3 localPos = worldPos - transform.position;
-
-        int x = Mathf.FloorToInt(localPos.x / cellSize);
-        int y = Mathf.FloorToInt(localPos.z / cellSize);
-
-        if (x < 0 || x >= cols || y < 0 || y >= rows)
-            return null;
-
-        return grid[x, y];
-    }
-
-    public void PaintAtPoint(Vector3 worldPos, float radius, float currentSpeed, Color paintColor)
-    {
-        Vector3 localPos = worldPos - transform.position;
-        Vector3 localCenter = new Vector3(localPos.x + canvasWidth * 0.5f, 0f, localPos.z + canvasHeight * 0.5f);
-
-        int centerX = Mathf.FloorToInt(localCenter.x / cellSize);
-        int centerY = Mathf.FloorToInt(localCenter.z / cellSize);
-
-        int range = Mathf.CeilToInt(radius / cellSize);
-
-        for (int x = centerX - range; x <= centerX + range; x++)
+        if (needsApply && dynamicTexture != null && pixelData != null)
         {
-            for (int y = centerY - range; y <= centerY + range; y++)
+            dynamicTexture.SetPixels32(pixelData);
+            dynamicTexture.Apply();
+            needsApply = false;
+        }
+    }
+
+    // دالة إزالة الكوليدر من الكواد الوحيد إذا كان موجوداً
+    // هذا يمنع أي كوليدرز غير مرغوب بها وتجنب مشاكل التحقق الجامعي
+    void RemoveColliderFromQuad()
+    {
+        Collider col = GetComponent<Collider>();
+        if (col != null)
+        {
+            Destroy(col);
+        }
+    }
+
+    // دالة إنشاء Texture2D جديدة في الذاكرة وتعبئتها بلون الخلفية الافتراضي
+    // دالة إنشاء Texture2D جديدة في الذاكرة وتعبئتها بلون الخلفية الافتراضي
+    void CreateDynamicTexture()
+    {
+        dynamicTexture = new Texture2D(textureWidth, textureHeight, TextureFormat.RGBA32, false);
+        dynamicTexture.filterMode = FilterMode.Bilinear;
+        dynamicTexture.wrapMode = TextureWrapMode.Clamp;
+
+        pixelData = new Color32[textureWidth * textureHeight];
+        Color32 clearColor32 = clearColor;
+        for (int i = 0; i < pixelData.Length; i++)
+        {
+            pixelData[i] = clearColor32;
+        }
+
+        dynamicTexture.SetPixels32(pixelData);
+        dynamicTexture.Apply();
+    }
+
+    // دالة ربط الـ Texture التي أنشأناها بالماتيريال الخاص بالكواد
+    // نستخدم مادة جديدة واحدة فقط لتفادي مشاكل الأداء في VR
+    void ApplyTextureToQuad()
+    {
+        quadRenderer = GetComponent<Renderer>();
+        if (quadRenderer == null)
+            return;
+
+        quadRenderer.sharedMaterial = new Material(quadRenderer.sharedMaterial);
+        quadRenderer.sharedMaterial.mainTexture = dynamicTexture;
+        quadRenderer.sharedMaterial.mainTextureScale = Vector2.one;
+        quadRenderer.sharedMaterial.mainTextureOffset = Vector2.zero;
+    }
+
+    // دالة الرسم: تحول نقطة الاصطدام إلى بكسل على التكتشر وتلون دائرة من البكسلات
+    public void PaintAtPoint(Vector3 worldPos, float radius, float currentSpeed)
+    {
+        if (dynamicTexture == null || pixelData == null)
+            return;
+
+        Vector3 localPos = transform.InverseTransformPoint(worldPos);
+        float u = localPos.x + 0.5f;
+        float v = localPos.y + 0.5f;
+
+        if (u < 0f || u > 1f || v < 0f || v > 1f)
+            return;
+
+        int centerX = Mathf.FloorToInt(u * textureWidth);
+        int centerY = Mathf.FloorToInt(v * textureHeight);
+
+        float boardWidth = Mathf.Abs(transform.localScale.x);
+        int pixelRadius = Mathf.CeilToInt((radius / boardWidth) * textureWidth);
+        pixelRadius = Mathf.Max(pixelRadius, 1);
+        int radiusSqr = pixelRadius * pixelRadius;
+
+        Color32 paintColor32 = currentPaintColor;
+
+        int startX = Mathf.Max(0, centerX - pixelRadius);
+        int endX = Mathf.Min(textureWidth - 1, centerX + pixelRadius);
+        int startY = Mathf.Max(0, centerY - pixelRadius);
+        int endY = Mathf.Min(textureHeight - 1, centerY + pixelRadius);
+
+        for (int x = startX; x <= endX; x++)
+        {
+            int dx = x - centerX;
+            int dxSqr = dx * dx;
+            for (int y = startY; y <= endY; y++)
             {
-                if (x < 0 || x >= cols || y < 0 || y >= rows)
+                int dy = y - centerY;
+                int distSqr = dxSqr + dy * dy;
+                if (distSqr > radiusSqr)
                     continue;
 
-                PaintCell cell = grid[x, y];
+                float strength = 1f - (Mathf.Sqrt(distSqr) / pixelRadius);
+                float alpha = Mathf.Clamp01(strength * currentSpeed * Time.deltaTime * 10f);
 
-                float cellCenterX = (x + 0.5f) * cellSize;
-                float cellCenterZ = (y + 0.5f) * cellSize;
-                float dx = cellCenterX - localCenter.x;
-                float dz = cellCenterZ - localCenter.z;
-                float dist = Mathf.Sqrt(dx * dx + dz * dz);
-
-                if (dist <= range * cellSize)
-                {
-                    float strength = 1f - (dist / (range * cellSize));
-                    ApplyPaint(cell, strength, currentSpeed, paintColor);
-                }
+                int index = y * textureWidth + x;
+                Color existing = pixelData[index];
+                Color blended = Color.Lerp(existing, paintColor32, alpha);
+                pixelData[index] = blended;
             }
         }
+
+        needsApply = true;
     }
 
-    private void ApplyPaint(PaintCell cell, float strength, float intensity, Color color)
+    // دالة تنظيف الذاكرة عند تدمير الكائن: تحذف الـ Texture والماتيريال الديناميكيين
+    void OnDestroy()
     {
-        float addedPaint = strength * Mathf.Clamp01(intensity * 0.1f) * Time.deltaTime * 10f;
-        cell.paintAmount = Mathf.Clamp01(cell.paintAmount + addedPaint);
-        cell.color = Color.Lerp(defaultCellColor, color, cell.paintAmount);
-        cell.painted = cell.paintAmount > 0f;
-
-        if (cell.cellObject == null)
-            return;
-
-        var renderer = cell.cellObject.GetComponent<Renderer>();
-        if (renderer == null)
-            return;
-
-        mpb.SetColor("_Color", cell.color);
-        renderer.SetPropertyBlock(mpb);
-    }
-
-    private void GenerateGrid()
-    {
-        grid = new PaintCell[cols, rows];
-        float startX = -canvasWidth * 0.5f + cellSize * 0.5f;
-        float startZ = -canvasHeight * 0.5f + cellSize * 0.5f;
-
-        for (int x = 0; x < cols; x++)
+        if (dynamicTexture != null)
         {
-            for (int y = 0; y < rows; y++)
-            {
-                Vector3 cellPosition = new Vector3(
-                    startX + x * cellSize,
-                    canvasYHeight,
-                    startZ + y * cellSize
-                );
+            Destroy(dynamicTexture);
+        }
 
-                GameObject cellObject = GameObject.CreatePrimitive(PrimitiveType.Quad);
-                cellObject.transform.position = transform.position + cellPosition;
-                cellObject.transform.parent = transform;
-                cellObject.transform.rotation = Quaternion.Euler(90f, 0f, 0f);
-                cellObject.transform.localScale = Vector3.one * cellSize;
-
-                var col = cellObject.GetComponent<Collider>();
-                if (col != null)
-                    Destroy(col);
-
-                PaintCell cell = new PaintCell();
-                cell.worldPosition = cellObject.transform.position;
-                cell.paintAmount = 0f;
-                cell.color = defaultCellColor;
-                cell.painted = false;
-                cell.cellObject = cellObject;
-
-                var renderer = cellObject.GetComponent<Renderer>();
-                if (renderer != null)
-                {
-                    mpb.SetColor("_Color", defaultCellColor);
-                    renderer.SetPropertyBlock(mpb);
-                }
-
-                grid[x, y] = cell;
-            }
+        if (quadRenderer != null && quadRenderer.sharedMaterial != null)
+        {
+            Destroy(quadRenderer.sharedMaterial);
         }
     }
 
-    private void HandlePaintSplatter(Vector3 bucketPosition, Color paintColor, float currentSpeed, float viscosity)
-    {
-        Vector3 impactPoint = new Vector3(bucketPosition.x, canvasYHeight, bucketPosition.z);
-        Vector3 local = impactPoint - transform.position;
-
-        float halfW = canvasWidth * 0.5f;
-        float halfH = canvasHeight * 0.5f;
-
-        if (local.x < -halfW || local.x > halfW || local.z < -halfH || local.z > halfH)
-            return;
-
-        float safeVisc = Mathf.Max(0.0001f, viscosity);
-        float radius = (currentSpeed / safeVisc) * baseRadiusFactor;
-        radius = Mathf.Clamp(radius, 0.01f, Mathf.Max(canvasWidth, canvasHeight));
-
-        PaintAtPoint(impactPoint, radius, currentSpeed, paintColor);
-    }
 }
