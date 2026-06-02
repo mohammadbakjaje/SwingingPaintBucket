@@ -2,114 +2,146 @@ using UnityEngine;
 
 public class PaintGrid : MonoBehaviour
 {
-    public int rows = 20;
-    public int cols = 20;
-
-    public float cellSize = 0.2f;
     public Color currentPaintColor = Color.red;
-    private PaintCell[,] grid;
 
+    [Header("Texture Settings")]
+    public int textureWidth = 1024;
+    public int textureHeight = 1024;
+    public Color clearColor = Color.white;
+
+    private Texture2D dynamicTexture;
+    private Color32[] pixelData;
+    private Renderer quadRenderer;
+    private bool needsApply = false;
+
+    // دالة تهيئة أولية: تنفذ مرة واحدة عند بدء تشغيل اللعبة
+    // هنا نحذف أي كوليدر موجود على الكواد، ننشئ التكتشر في الذاكرة، ثم نربطها بالماتيريال
     void Start()
     {
-        GenerateGrid();
+        RemoveColliderFromQuad();
+        CreateDynamicTexture();
+        ApplyTextureToQuad();
     }
-    public PaintCell GetCellFromWorldPosition(Vector3 worldPos)
+
+    // دالة تحديث نهاية الإطار: تطبق التغييرات على التكتشر مرة واحدة في نهاية كل فريم
+    void LateUpdate()
     {
-        // تحويل النقطة إلى local بالنسبة للوحة
-        Vector3 localPos = worldPos - transform.position;
-
-        int x = Mathf.FloorToInt(localPos.x / cellSize);
-        int y = Mathf.FloorToInt(localPos.z / cellSize);
-
-        // تحقق من الحدود
-        if (x < 0 || x >= rows || y < 0 || y >= cols)
-            return null;
-
-        return grid[x, y];
+        if (needsApply && dynamicTexture != null && pixelData != null)
+        {
+            dynamicTexture.SetPixels32(pixelData);
+            dynamicTexture.Apply();
+            needsApply = false;
+        }
     }
 
+    // دالة إزالة الكوليدر من الكواد الوحيد إذا كان موجوداً
+    // هذا يمنع أي كوليدرز غير مرغوب بها وتجنب مشاكل التحقق الجامعي
+    void RemoveColliderFromQuad()
+    {
+        Collider col = GetComponent<Collider>();
+        if (col != null)
+        {
+            Destroy(col);
+        }
+    }
 
+    // دالة إنشاء Texture2D جديدة في الذاكرة وتعبئتها بلون الخلفية الافتراضي
+    // دالة إنشاء Texture2D جديدة في الذاكرة وتعبئتها بلون الخلفية الافتراضي
+    void CreateDynamicTexture()
+    {
+        dynamicTexture = new Texture2D(textureWidth, textureHeight, TextureFormat.RGBA32, false);
+        dynamicTexture.filterMode = FilterMode.Bilinear;
+        dynamicTexture.wrapMode = TextureWrapMode.Clamp;
+
+        pixelData = new Color32[textureWidth * textureHeight];
+        Color32 clearColor32 = clearColor;
+        for (int i = 0; i < pixelData.Length; i++)
+        {
+            pixelData[i] = clearColor32;
+        }
+
+        dynamicTexture.SetPixels32(pixelData);
+        dynamicTexture.Apply();
+    }
+
+    // دالة ربط الـ Texture التي أنشأناها بالماتيريال الخاص بالكواد
+    // نستخدم مادة جديدة واحدة فقط لتفادي مشاكل الأداء في VR
+    void ApplyTextureToQuad()
+    {
+        quadRenderer = GetComponent<Renderer>();
+        if (quadRenderer == null)
+            return;
+
+        quadRenderer.sharedMaterial = new Material(quadRenderer.sharedMaterial);
+        quadRenderer.sharedMaterial.mainTexture = dynamicTexture;
+        quadRenderer.sharedMaterial.mainTextureScale = Vector2.one;
+        quadRenderer.sharedMaterial.mainTextureOffset = Vector2.zero;
+    }
+
+    // دالة الرسم: تحول نقطة الاصطدام إلى بكسل على التكتشر وتلون دائرة من البكسلات
     public void PaintAtPoint(Vector3 worldPos, float radius, float currentSpeed)
     {
-        Vector3 localPos = worldPos - transform.position;
+        if (dynamicTexture == null || pixelData == null)
+            return;
 
-        int centerX = Mathf.FloorToInt(localPos.x / cellSize);
-        int centerY = Mathf.FloorToInt(localPos.z / cellSize);
+        Vector3 localPos = transform.InverseTransformPoint(worldPos);
+        float u = localPos.x + 0.5f;
+        float v = localPos.y + 0.5f;
 
-        int range = Mathf.CeilToInt(radius / cellSize);
+        if (u < 0f || u > 1f || v < 0f || v > 1f)
+            return;
 
-        for (int x = centerX - range; x <= centerX + range; x++)
+        int centerX = Mathf.FloorToInt(u * textureWidth);
+        int centerY = Mathf.FloorToInt(v * textureHeight);
+
+        float boardWidth = Mathf.Abs(transform.localScale.x);
+        int pixelRadius = Mathf.CeilToInt((radius / boardWidth) * textureWidth);
+        pixelRadius = Mathf.Max(pixelRadius, 1);
+        int radiusSqr = pixelRadius * pixelRadius;
+
+        Color32 paintColor32 = currentPaintColor;
+
+        int startX = Mathf.Max(0, centerX - pixelRadius);
+        int endX = Mathf.Min(textureWidth - 1, centerX + pixelRadius);
+        int startY = Mathf.Max(0, centerY - pixelRadius);
+        int endY = Mathf.Min(textureHeight - 1, centerY + pixelRadius);
+
+        for (int x = startX; x <= endX; x++)
         {
-            for (int y = centerY - range; y <= centerY + range; y++)
+            int dx = x - centerX;
+            int dxSqr = dx * dx;
+            for (int y = startY; y <= endY; y++)
             {
-                if (x < 0 || x >= rows || y < 0 || y >= cols)
+                int dy = y - centerY;
+                int distSqr = dxSqr + dy * dy;
+                if (distSqr > radiusSqr)
                     continue;
 
-                PaintCell cell = grid[x, y];
+                float strength = 1f - (Mathf.Sqrt(distSqr) / pixelRadius);
+                float alpha = Mathf.Clamp01(strength * currentSpeed * Time.deltaTime * 10f);
 
-                float dist = Vector2.Distance(
-                    new Vector2(x, y),
-                    new Vector2(centerX, centerY)
-                );
-
-                if (dist <= range)
-                {
-                    float strength = 1f - (dist / range);
-
-                    ApplyPaint(cell, strength, currentSpeed);
-                }
+                int index = y * textureWidth + x;
+                Color existing = pixelData[index];
+                Color blended = Color.Lerp(existing, paintColor32, alpha);
+                pixelData[index] = blended;
             }
         }
+
+        needsApply = true;
     }
 
-
-    void ApplyPaint(PaintCell cell, float strength, float intensity)
+    // دالة تنظيف الذاكرة عند تدمير الكائن: تحذف الـ Texture والماتيريال الديناميكيين
+    void OnDestroy()
     {
-        // أضفنا عامل 'intensity' للتحكم بقوة الرشة (المركزية غامقة والطرطشة فاتحة)
-        float addedPaint = strength * intensity * Time.deltaTime * 10.0f;
-
-        cell.paintAmount += addedPaint;
-        cell.paintAmount = Mathf.Clamp01(cell.paintAmount);
-
-        Color finalColor = Color.Lerp(Color.white, currentPaintColor, cell.paintAmount);
-
-        if (cell.cellObject != null)
+        if (dynamicTexture != null)
         {
-            cell.cellObject.GetComponent<Renderer>().material.color = finalColor;
+            Destroy(dynamicTexture);
+        }
+
+        if (quadRenderer != null && quadRenderer.sharedMaterial != null)
+        {
+            Destroy(quadRenderer.sharedMaterial);
         }
     }
 
-    void GenerateGrid()
-    {
-        grid = new PaintCell[rows, cols];
-
-        for (int x = 0; x < rows; x++)
-        {
-            for (int y = 0; y < cols; y++)
-            {
-                Vector3 cellPosition = new Vector3(
-                    x * cellSize,
-                    0,
-                    y * cellSize
-                );
-                GameObject cellObject = GameObject.CreatePrimitive(PrimitiveType.Quad);
-
-                cellObject.transform.position = transform.position + cellPosition;
-                cellObject.transform.parent = transform;
-                cellObject.transform.rotation = Quaternion.Euler(90f, 0f, 0f);
-                cellObject.transform.localScale = Vector3.one * cellSize;
-
-                PaintCell cell = new PaintCell();
-                cell.worldPosition = cellObject.transform.position;
-                cell.paintAmount = 0f;
-                cell.color = Color.white;
-                cell.painted = false;
-                cell.cellObject = cellObject;
-                Renderer renderer = cellObject.GetComponent<Renderer>();
-                renderer.material.color = Color.white;
-
-                grid[x, y] = cell;
-            }
-        }
-    }
 }
