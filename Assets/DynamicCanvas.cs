@@ -123,9 +123,14 @@ public class DynamicCanvas : MonoBehaviour
         // convert to local space of the canvas
         Vector3 localPos = transform.InverseTransformPoint(worldPos);
 
-        // UV space assuming mesh spans from -0.5..0.5 in local coordinates
-        float u = localPos.x + 0.5f;
-        float v = localPos.y + 0.5f;
+        // Use the renderer's local bounds to map local position to texture UVs.
+        // This handles meshes that are not exactly -0.5..0.5 and supports non-square boards.
+        Bounds localBounds = quadRenderer.localBounds;
+        Vector3 min = localBounds.min;
+        Vector3 size = localBounds.size;
+
+        float u = size.x > 1e-6f ? (localPos.x - min.x) / size.x : 0.5f;
+        float v = size.y > 1e-6f ? (localPos.y - min.y) / size.y : 0.5f;
 
         // clamp UVs strictly to [0,1] range
         u = Mathf.Clamp01(u);
@@ -134,9 +139,14 @@ public class DynamicCanvas : MonoBehaviour
         int centerX = Mathf.Clamp(Mathf.FloorToInt(u * textureWidth), 0, textureWidth - 1);
         int centerY = Mathf.Clamp(Mathf.FloorToInt(v * textureHeight), 0, textureHeight - 1);
 
-        // Convert world-space radius to pixel radius using renderer bounds (world size)
-        float worldWidth = Mathf.Max(quadRenderer.bounds.size.x, 1e-6f);
-        int pixelRadius = Mathf.CeilToInt((radius / worldWidth) * textureWidth);
+        // Convert world-space radius to pixel radius using world-scaled bounds.
+        // Use the minimum pixel scale of X and Y so the spot remains circular even for stretched rectangles.
+        Vector3 worldSize = quadRenderer.bounds.size;
+        float worldWidth = Mathf.Max(worldSize.x, 1e-6f);
+        float worldHeight = Mathf.Max(worldSize.y, 1e-6f);
+        float pixelScaleX = textureWidth / worldWidth;
+        float pixelScaleY = textureHeight / worldHeight;
+        int pixelRadius = Mathf.CeilToInt(radius * Mathf.Min(pixelScaleX, pixelScaleY));
         pixelRadius = Mathf.Max(pixelRadius, 1);
         int radiusSqr = pixelRadius * pixelRadius;
 
