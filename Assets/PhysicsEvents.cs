@@ -8,8 +8,17 @@ using UnityEngine;
 public static class PhysicsEvents
 {
     /// <summary>
-    /// حدث يُبث عند حدوث رشّة طلاء (Splatter).
-    /// الوسائط: (position, color, speed, viscosity)
+    /// المفوض لحمل بيانات الاصطدام المفصلة لبقعة الطلاء.
+    /// </summary>
+    public delegate void PaintSplatterHandler(Vector3 impactPosition, Color paintColor, Vector3 impactVelocity, float viscosity);
+
+    /// <summary>
+    /// الحدث الاستاتيكي الذي يمكن الاشتراك به من قبل أنظمة الجرافيكس.
+    /// </summary>
+    public static PaintSplatterHandler OnPaintSplatterSplatted;
+
+    /// <summary>
+    /// حدث احتياطي للتماشي مع الواجهة الحالية.
     /// </summary>
     public static Action<Vector3, Color, float, float> OnPaintSplatter;
 
