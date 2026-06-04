@@ -7,8 +7,9 @@ public class PaintTester : MonoBehaviour
 
     [Header("Test Simulation Settings")]
     [SerializeField] private PaintManager.SurfaceType testSurface = PaintManager.SurfaceType.Metal;
-    [SerializeField] [Range(1f, 10f)] private float simulatedVelocity = 5f;
-    [SerializeField] [Range(0.1f, 5f)] private float simulatedViscosity = 1f;
+    [SerializeField][Range(1f, 10f)] private float simulatedVelocity = 5f;
+    [SerializeField][Range(0.1f, 5f)] private float simulatedViscosity = 1f;
+    [SerializeField] private Color32 testColor = new Color32(255, 0, 0, 255); // لون افتراضي للاختبار بالماوس
 
     private Camera mainCamera;
 
@@ -20,7 +21,7 @@ public class PaintTester : MonoBehaviour
     private void Update()
     {
         // عند الضغط بزر الفأرة الأيسر
-        if (Input.GetMouseButton(0)) 
+        if (Input.GetMouseButton(0))
         {
             Ray ray = mainCamera.ScreenPointToRay(Input.mousePosition);
             RaycastHit hit;
@@ -35,7 +36,8 @@ public class PaintTester : MonoBehaviour
                     Vector2 uv = hit.textureCoord;
 
                     // إرسال البيانات المحاكية إلى السكربت الأساسي لتجربة الرسم
-                    paintManager.OnPhysicsImpact(uv, simulatedVelocity, simulatedViscosity, testSurface);
+                    // تعديل: تمرير المعامل الخامس (testColor) ليطابق التحديث الجديد للدالة
+                    paintManager.OnPhysicsImpact(uv, simulatedVelocity, simulatedViscosity, testSurface, testColor);
                 }
             }
         }
