@@ -29,6 +29,7 @@ public class DynamicCanvas : MonoBehaviour
     {
         Debug.Log("DynamicCanvas: Awake");
         quadRenderer = GetComponent<Renderer>();
+        RemoveColliderFromQuad();
         CreateDynamicTexture();
         ApplyTextureToRenderer();
     }
@@ -100,6 +101,15 @@ public class DynamicCanvas : MonoBehaviour
         quadRenderer.sharedMaterial.mainTexture = dynamicTexture;
         quadRenderer.sharedMaterial.mainTextureScale = Vector2.one;
         quadRenderer.sharedMaterial.mainTextureOffset = Vector2.zero;
+    }
+
+    void RemoveColliderFromQuad()
+    {
+        Collider col = GetComponent<Collider>();
+        if (col != null)
+        {
+            Destroy(col);
+        }
     }
 
     // Handler matching PhysicsEvents.OnPaintSplatter signature: (Vector3 position, Color color, float speed, float viscosity)
