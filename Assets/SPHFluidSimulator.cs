@@ -11,6 +11,7 @@ public class SPHFluidSimulator : MonoBehaviour
         public Vector3 force;
         public float density;
         public float pressure;
+        public GameObject visualMesh; // المجسم البصري للقطرة في اللعبة
 
         public SPHParticle(Vector3 pos)
         {
@@ -25,34 +26,58 @@ public class SPHFluidSimulator : MonoBehaviour
     [Header("Fluid Flow Configuration")]
     public Transform paintOutlet;       // فوهة الخروج أسفل الدلو
     public DynamicPixelCanvas canvasTarget; // اللوحة الأرضية
-    public int maxParticlesInBucket = 300;  // تمت زيادة العدد لضمان كثافة الخيط
+    public int maxParticlesInBucket = 300;  
     public float particleMass = 0.05f;     
     
     [Range(0f, 5f)]
-    public float viscosity = 1.5f;         // اللزوجة (كلما زادت، تماسك الخيط أكثر ولم يتقطع)
+    public float viscosity = 1.5f;         
     public float viscosityMu { get { return viscosity; } set { viscosity = value; } }
     
-    public float outletRadius = 0.04f;     // قطر الفتحة (يتحكم بسُمك خيط الطلاء)
+    public float outletRadius = 0.04f;     
     public float gravity = -9.81f;
 
+    [Header("Paint Visual Settings")]
+    public GameObject dropPrefab;               // البريفاب البصري للقطرة (كرة حمراء مثلاً)
+    [Range(0.01f, 0.5f)] public float dropWidth = 0.04f; // سُمك خيط الطلاء
+    public float stretchMultiplier = 0.03f;     // مدى تمدد القطرة مع السرعة لتظهر كخيط متصل
+    public Color paintColor = Color.red;        // لون الطلاء السائل
+
     [Header("Paint Quantity Settings")]
-    public int totalPaintDroplets = 2000;  // مخزون أكبر ليدوم الرسم أطول
-    public float flowRateSpeed = 3.0f;     // سرعة دفع الطلاء للأسفل
+    public int totalPaintDroplets = 2000;  
+    public float flowRateSpeed = 3.0f;     
     public bool continuousFlow = true;     
 
     private List<SPHParticle> particles;
+    private GameObject visualsContainer; // حاوية عالمية منفصلة لمنع تشوه الحجم (Scale)
 
     void Start()
     {
         particles = new List<SPHParticle>();
+
+        // إنشاء حاوية مستقلة تماماً في المشهد لتجنب وراثة حجم الدلو المشوه
+        visualsContainer = new GameObject("Fluid_Visuals_Container");
         
         for (int i = 0; i < maxParticlesInBucket; i++)
         {
-            // توليد الجسيمات بناءً على قطر الفتحة المخصص
             Vector3 randomOffset = transform.up * Random.Range(-0.1f, 0.1f) + 
                                    transform.right * Random.Range(-outletRadius, outletRadius) + 
                                    transform.forward * Random.Range(-outletRadius, outletRadius);
-            particles.Add(new SPHParticle(transform.position + randomOffset));
+            
+            Vector3 spawnPos = transform.position + randomOffset;
+            SPHParticle p = new SPHParticle(spawnPos);
+
+            // إنشاء المظهر البصري للقطرة فوراً عند البداية
+            if (dropPrefab != null)
+            {
+                p.visualMesh = Instantiate(dropPrefab, spawnPos, Quaternion.identity, visualsContainer.transform);
+                p.visualMesh.transform.localScale = Vector3.one * dropWidth;
+                
+                // تلوين القطرة تلقائياً باللون المحدد
+                Renderer rend = p.visualMesh.GetComponent<Renderer>();
+                if (rend != null) rend.material.color = paintColor;
+            }
+
+            particles.Add(p);
         }
     }
 
@@ -62,7 +87,7 @@ public class SPHFluidSimulator : MonoBehaviour
         return particles.Count * particleMass;
     }
 
-   void FixedUpdate()
+    void FixedUpdate()
     {
         if (particles == null || (particles.Count == 0 && totalPaintDroplets <= 0)) return;
 
@@ -76,7 +101,6 @@ public class SPHFluidSimulator : MonoBehaviour
 
             if (p.position.y > targetOutletPos.y)
             {
-                // سحب الطلاء داخل الدلو
                 p.velocity = Vector3.down * flowRateSpeed;
                 p.position += p.velocity * dt;
 
@@ -89,14 +113,8 @@ public class SPHFluidSimulator : MonoBehaviour
             }
             else
             {
-                // --- التعديل الفيزيائي الجوهري ---
-                // 1. تطبيق الجاذبية
                 p.velocity.y += gravity * dt;
-                
-                // 2. تطبيق الكبح اللزج (Viscous Drag): يمنع الجسيمات السفلية من الهروب والتمزق
-                // هذا يحافظ على تماسك عمود السائل ليضرب اللوحة كخيط متصل!
                 p.velocity -= p.velocity * (viscosity * 0.5f) * dt; 
-                
                 p.position += p.velocity * dt;
 
                 if (p.position.y <= 0.05f)
@@ -108,13 +126,13 @@ public class SPHFluidSimulator : MonoBehaviour
 
                     if (continuousFlow)
                     {
-                        // إعادة التدوير من خلال الفتحة المخصصة
                         p.position = bucketPos + Vector3.up * 0.1f + 
                                      new Vector3(Random.Range(-outletRadius, outletRadius), 0, Random.Range(-outletRadius, outletRadius));
                         p.velocity = Vector3.zero;
                     }
                     else
                     {
+                        if (p.visualMesh != null) Destroy(p.visualMesh);
                         particles.RemoveAt(i);
                         totalPaintDroplets--;
 
@@ -122,13 +140,45 @@ public class SPHFluidSimulator : MonoBehaviour
                         {
                             Vector3 spawnPos = bucketPos + Vector3.up * 0.1f + 
                                                new Vector3(Random.Range(-outletRadius, outletRadius), 0, Random.Range(-outletRadius, outletRadius));
-                            particles.Add(new SPHParticle(spawnPos));
+                            
+                            SPHParticle newParticle = new SPHParticle(spawnPos);
+                            if (dropPrefab != null)
+                            {
+                                newParticle.visualMesh = Instantiate(dropPrefab, spawnPos, Quaternion.identity, visualsContainer.transform);
+                                newParticle.visualMesh.transform.localScale = Vector3.one * dropWidth;
+                                Renderer rend = newParticle.visualMesh.GetComponent<Renderer>();
+                                if (rend != null) rend.material.color = paintColor;
+                            }
+                            particles.Add(newParticle);
                         }
                         continue;
                     }
                 }
             }
+
+            // تحديث موقع وتشكيل القطرة المرئية في اللعبة
+            if (p.visualMesh != null)
+            {
+                p.visualMesh.transform.position = p.position;
+
+                // سحر التسييل: جعل القطرة تتجه وتتمدد بناءً على اتجاه وسرعة سقوطها
+                if (p.velocity.magnitude > 0.1f)
+                {
+                    p.visualMesh.transform.up = p.velocity.normalized;
+                    float stretch = Mathf.Max(dropWidth, p.velocity.magnitude * stretchMultiplier);
+                    p.visualMesh.transform.localScale = new Vector3(dropWidth, stretch, dropWidth);
+                }
+                else
+                {
+                    p.visualMesh.transform.localScale = Vector3.one * dropWidth;
+                }
+            }
         }
+    }
+
+    private void OnDestroy()
+    {
+        if (visualsContainer != null) Destroy(visualsContainer);
     }
 
     void OnDrawGizmos()
