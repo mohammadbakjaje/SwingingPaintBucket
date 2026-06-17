@@ -2,11 +2,17 @@ using UnityEngine;
 using System.Collections.Generic;
 
 /// <summary>
-/// محاكي سائل SPH فائق الأداء - نسخة التدفق الانسيابي المتسلسل الجماعي.
-/// تم حل مشكلة احتباس القطرات عند تكبير الفتحة وتوجيهها مركزياً بشكل مرن مع حركة الدلو.
+/// محاكي سائل SPH فائق الأداء - مع فيزياء الأسطح ومظهر المواد الحقيقي.
 /// </summary>
 public class CustomSPHFluid : MonoBehaviour
 {
+    public enum CanvasMaterialType 
+    { 
+        Cloth, 
+        Wood,  
+        Metal  
+    }
+
     private class FluidParticle
     {
         public Vector3 position;
@@ -20,6 +26,17 @@ public class CustomSPHFluid : MonoBehaviour
         public TrailRenderer trailRenderer; 
         public bool isEmitted; 
     }
+
+    [Header("🎨 Canvas Material Physics & Look")]
+    [Tooltip("اختر نوع المادة للوحة")]
+    public CanvasMaterialType surfaceMaterial = CanvasMaterialType.Cloth;
+    
+    [Tooltip("ضع هنا صورة القماش")]
+    public Texture2D clothTexture;
+    [Tooltip("ضع هنا صورة الخشب")]
+    public Texture2D woodTexture;
+    [Tooltip("ضع هنا صورة المعدن")]
+    public Texture2D metalTexture;
 
     [Header("Fluid Properties")]
     public int maxParticles = 250;          
@@ -41,10 +58,8 @@ public class CustomSPHFluid : MonoBehaviour
     public float bottomRadius = 0.35f;      
     public float drainHoleRadius = 0.08f;    
 
-    [Header("Stream Control (التحكم في خيط الصب)")]
-    [Tooltip("عدد القطرات المسموح بخروجها في الثانية الواحدة (كلما زاد، أصبح الخيط أسمك ومتصلاً أكثر)")]
+    [Header("Stream Control")]
     public float emissionRate = 60f;        
-    [Tooltip("سرعة دفع السائل الابتدائية إلى الأسفل لحظة خروجه من الفتحة")]
     public float exitVelocity = 3f;         
     private float emissionAccumulator = 0f; 
 
@@ -62,7 +77,7 @@ public class CustomSPHFluid : MonoBehaviour
     public bool invertZ = false;
 
     private List<FluidParticle> particles = new List<FluidParticle>();
-    private Vector3 lastBucketPosition; // ✅ تم إضافة تعريف المتغير هنا لإصلاح خطأ السياق
+    private Vector3 lastBucketPosition; 
     private Texture2D dynamicCanvasTexture; 
     private Color32[] canvasPixels; 
     private Color32 paintColor32;
@@ -85,8 +100,6 @@ public class CustomSPHFluid : MonoBehaviour
         smoothingRadiusSq = smoothingRadius * smoothingRadius;
         paintColor32 = paintColor;
         currentPaintReserve = totalPaintReserve;
-        
-        // تسجيل الموقع الابتدائي للدلو لتجنب قفزات السرعة في أول فريم
         lastBucketPosition = bucketTransform.position; 
 
         InitializeCanvas();
@@ -103,8 +116,35 @@ public class CustomSPHFluid : MonoBehaviour
         int totalPixels = textureResolution * textureResolution;
         canvasPixels = new Color32[totalPixels];
         
-        Color32 white = new Color32(255, 255, 255, 255);
-        for (int i = 0; i < totalPixels; i++) canvasPixels[i] = white;
+        // 1. تحديد الصورة الأساسية المطلوبة بناءً على الاختيار
+        Texture2D selectedBaseTexture = null;
+        switch (surfaceMaterial)
+        {
+            case CanvasMaterialType.Cloth: selectedBaseTexture = clothTexture; break;
+            case CanvasMaterialType.Wood: selectedBaseTexture = woodTexture; break;
+            case CanvasMaterialType.Metal: selectedBaseTexture = metalTexture; break;
+        }
+
+        // 2. إذا كانت هناك صورة مخصصة للمادة، نقوم بنسخها كخلفية
+        if (selectedBaseTexture != null)
+        {
+            for (int y = 0; y < textureResolution; y++)
+            {
+                for (int x = 0; x < textureResolution; x++)
+                {
+                    // نستخدم GetPixelBilinear لضمان قراءة اللون بشكل صحيح حتى لو كانت الصورة بأبعاد مختلفة عن الـ Resolution
+                    float u = (float)x / textureResolution;
+                    float v = (float)y / textureResolution;
+                    canvasPixels[y * textureResolution + x] = selectedBaseTexture.GetPixelBilinear(u, v);
+                }
+            }
+        }
+        else 
+        {
+            // في حال نسيت وضع صورة، سنجعل الخلفية بيضاء افتراضياً
+            Color32 defaultColor = new Color32(255, 255, 255, 255);
+            for (int i = 0; i < totalPixels; i++) canvasPixels[i] = defaultColor;
+        }
         
         dynamicCanvasTexture.SetPixels32(canvasPixels);
         dynamicCanvasTexture.Apply(false);
@@ -244,11 +284,8 @@ public class CustomSPHFluid : MonoBehaviour
     void FixedUpdate()
     {
         float dt = Time.fixedDeltaTime;
-
-        // شحن العداد الزمني لتنظيم خروج القطرات بالتساوي والتسلسل
         emissionAccumulator += dt;
 
-        // حساب كم جزيء يُسمح له بالخروج في هذا الفريم دفعة واحدة لمنع التراكم والاحتباس
         float timeBetweenEmissions = 1f / emissionRate;
         int allowedEmissionsThisFrame = Mathf.FloorToInt(emissionAccumulator / timeBetweenEmissions);
         int emittedThisFrame = 0;
@@ -257,7 +294,6 @@ public class CustomSPHFluid : MonoBehaviour
         if (runtimeLiquidMaterial != null) runtimeLiquidMaterial.color = paintColor;
         if (runtimeParticleMaterial != null) runtimeParticleMaterial.color = paintColor;
 
-        // ✅ حساب السرعة الحركية الفعلية للدلو وحقنها في القصور الذاتي للسائل
         Vector3 bucketVelocity = Vector3.zero;
         if (dt > 0f && bucketTransform != null)
         {
@@ -268,11 +304,9 @@ public class CustomSPHFluid : MonoBehaviour
         CalculateDensityAndPressure();
         CalculateForces();
         
-        // تمرير المتغيرات المحسوبة لدالة الاصطدام والتدفق الجماعي
         UpdateParticlesAndCollisions(dt, bucketVelocity, allowedEmissionsThisFrame, ref emittedThisFrame);
         UpdateProceduralLiquidMesh();
 
-        // خصم التذاكر الزمنية المستهلكة فقط لتنظيم خيط الصب بدقة
         emissionAccumulator -= emittedThisFrame * timeBetweenEmissions;
         if (emissionAccumulator < 0f) emissionAccumulator = 0f;
     }
@@ -336,7 +370,6 @@ public class CustomSPHFluid : MonoBehaviour
 
     Vector3 p2Position(Vector3 p2, Vector3 p1) { return p2 - p1; }
 
-    // ✅ دالة التحديث المحدثة بالبارامترات الجديدة لحل مشكلة السكب تماماً
     void UpdateParticlesAndCollisions(float dt, Vector3 bucketVelocity, int allowedEmissions, ref int emittedCount)
     {
         Vector3 bPos = bucketTransform.position;
@@ -350,7 +383,6 @@ public class CustomSPHFluid : MonoBehaviour
             p.velocity += p.force * dt;
             p.position += p.velocity * dt;
 
-            // ملامسة الأرض والرسم المستمر الناعم
             if (floorRenderer != null && p.position.y <= floorRenderer.transform.position.y)
             {
                 if (p.isEmitted) PaintLineOnCanvas(p.previousPosition, p.position, p.velocity.magnitude);
@@ -389,8 +421,6 @@ public class CustomSPHFluid : MonoBehaviour
                 Vector2 horizontalPos = new Vector2(localPos.x, localPos.z);
                 float distFromCenter = horizontalPos.magnitude;
 
-                // 🔥 [تأثير القمع المغناطيسي]: سحب الجزيئات برفق نحو مركز الفتحة عند اقترابها من القاع
-                // هذا الإجراء يكسر قوة الطرد المركزي الناتجة عن تدوير الدلو بعد تكبير الحجم والفتحة
                 if (localPos.y < -bucketHeight * 0.4f)
                 {
                     Vector3 pullToCenter = new Vector3(-localPos.x, 0f, -localPos.z) * 12f;
@@ -409,13 +439,11 @@ public class CustomSPHFluid : MonoBehaviour
                     p.velocity = bRot * localVel;
                 }
 
-                // منطقة الخروج والتحكم بالتدفق المشترك الجماعي
                 float bottomThreshold = -bucketHeight + 0.02f;
                 if (localPos.y <= bottomThreshold)
                 {
                     if (distFromCenter < drainHoleRadius && currentPaintReserve > 0f)
                     {
-                        // 🔥 [نظام الحصص الجماعي]: تمرير كافة الجزيئات المسموح لها بالخروج في نفس الفريم
                         if (emittedCount < allowedEmissions)
                         {
                             p.isEmitted = true;
@@ -426,7 +454,6 @@ public class CustomSPHFluid : MonoBehaviour
                             localPos.z = 0f;
                             localPos.y = -bucketHeight; 
 
-                            // دمج سرعة الاندفاع الذاتي للأسفل مع القصور الذاتي الحركي للبندول لصب طبيعي رائع
                             Vector3 localExitVel = new Vector3(0f, -exitVelocity, 0f);
                             p.velocity = (bRot * localExitVel) + bucketVelocity;
 
@@ -435,7 +462,6 @@ public class CustomSPHFluid : MonoBehaviour
                         }
                         else
                         {
-                            // ارتداد هيدروليكي آمن للجزيئات الإضافية في الفريم الحالي حتى يحين دورها بالفريم القادم
                             localPos.y = bottomThreshold;
                             Vector3 localVel = Quaternion.Inverse(bRot) * p.velocity;
                             localVel.y *= -0.05f; 
@@ -526,9 +552,28 @@ public class CustomSPHFluid : MonoBehaviour
         float pixelDist = Vector2.Distance(new Vector2(x1, y1), new Vector2(x2, y2));
         int steps = Mathf.Max(1, Mathf.RoundToInt(pixelDist / (brushRadius * 0.4f)));
 
+        float spreadMultiplier = 1f;
+        float splatterChance = 0f;
+
+        switch (surfaceMaterial)
+        {
+            case CanvasMaterialType.Cloth:
+                spreadMultiplier = 0.6f; 
+                splatterChance = 0.1f;   
+                break;
+            case CanvasMaterialType.Wood:
+                spreadMultiplier = 1.0f; 
+                splatterChance = 0.4f;   
+                break;
+            case CanvasMaterialType.Metal:
+                spreadMultiplier = 1.7f; 
+                splatterChance = 0.8f;   
+                break;
+        }
+
         float speedFactor = Mathf.Clamp(impactSpeed * 0.15f, 0.7f, 2.2f);
-        int dynamicRadius = Mathf.RoundToInt(brushRadius * speedFactor);
-        if (dynamicRadius < 3) dynamicRadius = 3;
+        int dynamicRadius = Mathf.RoundToInt(brushRadius * speedFactor * spreadMultiplier);
+        if (dynamicRadius < 2) dynamicRadius = 2;
 
         for (int i = 0; i <= steps; i++)
         {
@@ -536,13 +581,13 @@ public class CustomSPHFluid : MonoBehaviour
             int centerX = Mathf.RoundToInt(Mathf.Lerp(x1, x2, lerpRatio));
             int centerY = Mathf.RoundToInt(Mathf.Lerp(y1, y2, lerpRatio));
 
-            ApplyBrushStamp(centerX, centerY, dynamicRadius);
+            ApplyBrushStamp(centerX, centerY, dynamicRadius, splatterChance);
         }
 
         isTextureDirty = true;
     }
 
-    void ApplyBrushStamp(int centerX, int centerY, int radius)
+    void ApplyBrushStamp(int centerX, int centerY, int radius, float splatterChance)
     {
         for (int x = -radius; x <= radius; x++)
         {
@@ -553,7 +598,10 @@ public class CustomSPHFluid : MonoBehaviour
 
                 if (distSq <= radiusSq)
                 {
-                    if (distSq / (float)radiusSq > 0.75f && Random.value > 0.4f) continue; 
+                    if (distSq / (float)radiusSq > 0.65f)
+                    {
+                        if (Random.value < splatterChance) continue; 
+                    }
 
                     int px = centerX + x;
                     int py = centerY + y;
