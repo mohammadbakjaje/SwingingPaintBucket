@@ -407,7 +407,7 @@ Transform:
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 4, y: 4, z: 4}
+  m_LocalScale: {x: 10, y: 10, z: 10}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 0}
@@ -455,7 +455,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: f9c6a48db1f7e0f4ea2b29501f179566, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::CustomSPHFluid
-  surfaceMaterial: 0
+  surfaceMaterial: 2
   clothTexture: {fileID: 2800000, guid: 11880251fd1545a4a8c871e939e13308, type: 3}
   woodTexture: {fileID: 2800000, guid: c0bd15cbf9d051c4a9be3c1893aea16c, type: 3}
   metalTexture: {fileID: 2800000, guid: 746cf88f97cfc0b469f88e8261c7a798, type: 3}
@@ -471,12 +471,12 @@ MonoBehaviour:
   bucketHeight: 1.77
   topRadius: 0.5
   bottomRadius: 0.38
-  drainHoleRadius: 0.01
+  drainHoleRadius: 0.2
   emissionRate: 100
-  exitVelocity: 3
+  exitVelocity: -3
   floorRenderer: {fileID: 1254977205}
   textureResolution: 1024
-  brushRadius: 7
+  brushRadius: 3
   paintColor: {r: 1, g: 0, b: 0, a: 1}
   paintMaterial: {fileID: 2100000, guid: 699620f7caacf804a90b89ccc9dbe25a, type: 2}
   invertX: 1
@@ -490,7 +490,7 @@ Transform:
   m_GameObject: {fileID: 1400732781}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 6.67031, y: 0, z: -9.30131}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -677,7 +677,7 @@ MonoBehaviour:
   fluidSimulationObject: {fileID: 1400732783}
   initialAngleX: 35
   initialAngleZ: 0
-  orbitalPushSpeed: 0
+  orbitalPushSpeed: 4
 --- !u!4 &2027721174
 Transform:
   m_ObjectHideFlags: 0

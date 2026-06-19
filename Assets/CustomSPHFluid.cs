@@ -1,8 +1,10 @@
+
 using UnityEngine;
 using System.Collections.Generic;
 
 /// <summary>
 /// محاكي سائل SPH فائق الأداء - مع فيزياء الأسطح ومظهر المواد الحقيقي.
+/// تم حل مشكلة توقف التدفق عند ميلان الدلو، خروج الطلاء من الجوانب، وتجمع القطرات.
 /// </summary>
 public class CustomSPHFluid : MonoBehaviour
 {
@@ -116,7 +118,6 @@ public class CustomSPHFluid : MonoBehaviour
         int totalPixels = textureResolution * textureResolution;
         canvasPixels = new Color32[totalPixels];
         
-        // 1. تحديد الصورة الأساسية المطلوبة بناءً على الاختيار
         Texture2D selectedBaseTexture = null;
         switch (surfaceMaterial)
         {
@@ -125,14 +126,12 @@ public class CustomSPHFluid : MonoBehaviour
             case CanvasMaterialType.Metal: selectedBaseTexture = metalTexture; break;
         }
 
-        // 2. إذا كانت هناك صورة مخصصة للمادة، نقوم بنسخها كخلفية
         if (selectedBaseTexture != null)
         {
             for (int y = 0; y < textureResolution; y++)
             {
                 for (int x = 0; x < textureResolution; x++)
                 {
-                    // نستخدم GetPixelBilinear لضمان قراءة اللون بشكل صحيح حتى لو كانت الصورة بأبعاد مختلفة عن الـ Resolution
                     float u = (float)x / textureResolution;
                     float v = (float)y / textureResolution;
                     canvasPixels[y * textureResolution + x] = selectedBaseTexture.GetPixelBilinear(u, v);
@@ -141,7 +140,6 @@ public class CustomSPHFluid : MonoBehaviour
         }
         else 
         {
-            // في حال نسيت وضع صورة، سنجعل الخلفية بيضاء افتراضياً
             Color32 defaultColor = new Color32(255, 255, 255, 255);
             for (int i = 0; i < totalPixels; i++) canvasPixels[i] = defaultColor;
         }
@@ -439,36 +437,38 @@ public class CustomSPHFluid : MonoBehaviour
                     p.velocity = bRot * localVel;
                 }
 
-                float bottomThreshold = -bucketHeight + 0.02f;
-                if (localPos.y <= bottomThreshold)
+                // --- التعديل الجوهري للقطرات ---
+                // التأكد من أن القطرات تخرج فقط من الثقب وباتجاه ميلان الدلو
+                if (currentPaintReserve > 0f && emittedCount < allowedEmissions)
                 {
-                    if (distFromCenter < drainHoleRadius && currentPaintReserve > 0f)
-                    {
-                        if (emittedCount < allowedEmissions)
-                        {
-                            p.isEmitted = true;
-                            if (p.meshRenderer != null) p.meshRenderer.enabled = true;
-                            if (p.trailRenderer != null) { p.trailRenderer.enabled = true; p.trailRenderer.Clear(); }
+                    p.isEmitted = true;
+                    if (p.meshRenderer != null) p.meshRenderer.enabled = true;
 
-                            localPos.x = 0f;
-                            localPos.z = 0f;
-                            localPos.y = -bucketHeight; 
+                    // إزاحة القطرة قليلاً للأسفل (-0.05) لتجنب التداخل مع مجسم الدلو
+                    localPos.x = Random.Range(-drainHoleRadius, drainHoleRadius) * 0.5f;
+                    localPos.z = Random.Range(-drainHoleRadius, drainHoleRadius) * 0.5f;
+                    localPos.y = -bucketHeight - 0.05f; 
 
-                            Vector3 localExitVel = new Vector3(0f, -exitVelocity, 0f);
-                            p.velocity = (bRot * localExitVel) + bucketVelocity;
+                    // استخدام (-bucketTransform.up) لضمان الخروج مع اتجاه الثقب بدلاً من الأسفل المطلق للعالم
+                    Vector3 worldExitDirection = -bucketTransform.up; 
+                    p.velocity = (worldExitDirection * exitVelocity) + bucketVelocity;
 
-                            currentPaintReserve -= 1f;
-                            emittedCount++; 
-                        }
-                        else
-                        {
-                            localPos.y = bottomThreshold;
-                            Vector3 localVel = Quaternion.Inverse(bRot) * p.velocity;
-                            localVel.y *= -0.05f; 
-                            p.velocity = bRot * localVel;
-                        }
+                    currentPaintReserve -= 1f;
+                    emittedCount++; 
+
+                    // تحديث المكان فوراً لكي لا يقوم الـ Trail برسم خط عشوائي
+                    p.position = (bRot * localPos) + bPos;
+                    if (p.visualTransform != null) p.visualTransform.position = p.position;
+
+                    if (p.trailRenderer != null) { 
+                        p.trailRenderer.enabled = true; 
+                        p.trailRenderer.Clear(); 
                     }
-                    else
+                }
+                else
+                {
+                    float bottomThreshold = -bucketHeight + 0.02f;
+                    if (localPos.y <= bottomThreshold)
                     {
                         localPos.y = bottomThreshold;
                         Vector3 localVel = Quaternion.Inverse(bRot) * p.velocity;
@@ -649,3 +649,4 @@ public class CustomSPHFluid : MonoBehaviour
         }
     }
 }
+
