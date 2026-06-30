@@ -85,6 +85,7 @@ public class PureMathPaintCanvas : MonoBehaviour
 
     private void DrawCircleBrush(int cx, int cy, int radius, Color color)
     {
+        float intensity = 0.65f;
         for (int x = -radius; x <= radius; x++)
         {
             for (int y = -radius; y <= radius; y++)
@@ -96,7 +97,7 @@ public class PureMathPaintCanvas : MonoBehaviour
 
                     if (targetX >= 0 && targetX < textureSize && targetY >= 0 && targetY < textureSize)
                     {
-                        dynamicTexture.SetPixel(targetX, targetY, color);
+                        BlendCanvasPixel(targetX, targetY, color, intensity);
                     }
                 }
             }
@@ -128,6 +129,13 @@ public class PureMathPaintCanvas : MonoBehaviour
                 y0 += sy;
             }
         }
+    }
+
+    private void BlendCanvasPixel(int x, int y, Color newColor, float blendFactor)
+    {
+        Color current = dynamicTexture.GetPixel(x, y);
+        Color finalColor = Color.Lerp(current, newColor, Mathf.Clamp01(blendFactor));
+        dynamicTexture.SetPixel(x, y, finalColor);
     }
 
     public void ResetLastTransientPosition()

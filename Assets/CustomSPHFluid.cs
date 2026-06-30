@@ -26,7 +26,9 @@ public class CustomSPHFluid : MonoBehaviour
         public Transform visualTransform;
         public MeshRenderer meshRenderer; 
         public TrailRenderer trailRenderer; 
-        public bool isEmitted; 
+        public bool isEmitted;
+        public Color color;
+        public float colorWeight;
     }
 
     [Header("🎨 Canvas Material Physics & Look")]
@@ -78,8 +80,14 @@ public class CustomSPHFluid : MonoBehaviour
     public int brushRadius = 7;             
 
     [Header("Unified Color Synchronization")]
-    public Color paintColor = Color.blue;   
-    public Material paintMaterial;          
+    public Color paintColor = Color.blue;
+    public Color[] paintColors = new Color[] { Color.blue };
+    [Tooltip("كم لون تريد أن تختار من القائمة")]
+    public int paintColorCount = 1;
+    [Tooltip("اختر هل يتم اختيار لون الجسيم بشكل عشوائي من الألوان المتاحة")]
+    public bool randomizePaintColors = true;
+    public Material paintMaterial;
+    public float particleBlendStrength = 0.05f;
 
     [Header("Canvas Fixes")]
     public bool invertX = false;
@@ -89,6 +97,7 @@ public class CustomSPHFluid : MonoBehaviour
     private Vector3 lastBucketPosition;
     private Vector3 lastDrainPosition;
     private Texture2D dynamicCanvasTexture; 
+    private MaterialPropertyBlock particlePropertyBlock;
     private Color32[] canvasPixels; 
     private Color32 paintColor32;
     private bool isTextureDirty = false;    
@@ -108,10 +117,16 @@ public class CustomSPHFluid : MonoBehaviour
         if (bucketTransform == null) return;
         
         smoothingRadiusSq = smoothingRadius * smoothingRadius;
+        if (paintColors == null || paintColors.Length == 0)
+        {
+            paintColors = new Color[] { paintColor };
+        }
+        paintColorCount = Mathf.Clamp(paintColorCount, 1, paintColors.Length);
         paintColor32 = paintColor;
         currentPaintReserve = totalPaintReserve;
         lastBucketPosition = bucketTransform.position;
         lastDrainPosition = drainPoint != null ? drainPoint.position : bucketTransform.TransformPoint(new Vector3(0f, -bucketHeight, 0f));
+        particlePropertyBlock = new MaterialPropertyBlock();
 
         InitializeCanvas();
         InitializeRuntimeMaterials();
@@ -124,6 +139,24 @@ public class CustomSPHFluid : MonoBehaviour
         rimYOffset = Mathf.Max(0f, rimYOffset);
         bucketHeight = Mathf.Max(rimYOffset + 0.01f, bucketHeight);
         drainHoleRadius = Mathf.Max(0f, drainHoleRadius);
+
+        if (paintColors == null || paintColors.Length == 0)
+        {
+            paintColors = new Color[] { paintColor };
+        }
+        paintColorCount = Mathf.Clamp(paintColorCount, 1, Mathf.Max(1, paintColors.Length));
+    }
+
+    Color GetPaintColor()
+    {
+        if (paintColors == null || paintColors.Length == 0)
+            return paintColor;
+
+        int count = Mathf.Clamp(paintColorCount, 1, paintColors.Length);
+        if (randomizePaintColors && count > 1)
+            return paintColors[Random.Range(0, count)];
+
+        return paintColors[0];
     }
 
     void InitializeCanvas()
@@ -278,9 +311,15 @@ public class CustomSPHFluid : MonoBehaviour
         p.previousPosition = p.position;
         p.velocity = Vector3.zero;
         p.force = Vector3.zero;
-        p.isEmitted = false; 
+        p.isEmitted = false;
+        p.color = GetPaintColor();
+        p.colorWeight = 1f;
         
-        if (p.meshRenderer != null) p.meshRenderer.enabled = false;
+        if (p.meshRenderer != null)
+        {
+            p.meshRenderer.enabled = false;
+            UpdateParticleVisualColor(p);
+        }
         if (p.trailRenderer != null) { p.trailRenderer.enabled = false; p.trailRenderer.Clear(); }
         if (p.visualTransform != null) p.visualTransform.position = p.position;
     }
@@ -330,6 +369,8 @@ public class CustomSPHFluid : MonoBehaviour
 
         emissionAccumulator -= emittedThisFrame * timeBetweenEmissions;
         if (emissionAccumulator < 0f) emissionAccumulator = 0f;
+
+        RefreshParticleVisuals();
     }
 
     void CalculateDensityAndPressure()
@@ -384,6 +425,24 @@ public class CustomSPHFluid : MonoBehaviour
 
                     Vector3 relativeVelocity = particles[j].velocity - p1.velocity;
                     p1.force += relativeVelocity * viscosity * rSq;
+
+                    if (distSq < smoothingRadiusSq * 0.25f)
+                    {
+                        float dist = Mathf.Sqrt(distSq);
+                        float influence = Mathf.Clamp01(1f - (dist / (smoothingRadius * 0.5f)));
+                        float blendAmount = Mathf.Clamp01(influence * 0.08f);
+                        if (blendAmount > 0f)
+                        {
+                            float totalColorWeight = Mathf.Max(0.0001f, p1.colorWeight + particles[j].colorWeight);
+                            Color neighborMix = Color.Lerp(p1.color, particles[j].color, particles[j].colorWeight / totalColorWeight);
+                            Color inverseMix = Color.Lerp(particles[j].color, p1.color, p1.colorWeight / totalColorWeight);
+                            p1.color = Color.Lerp(p1.color, neighborMix, blendAmount);
+                            particles[j].color = Color.Lerp(particles[j].color, inverseMix, blendAmount);
+                            float avgWeight = Mathf.Lerp(p1.colorWeight, particles[j].colorWeight, 0.5f);
+                            p1.colorWeight = avgWeight;
+                            particles[j].colorWeight = avgWeight;
+                        }
+                    }
                 }
             }
         }
@@ -418,7 +477,7 @@ public class CustomSPHFluid : MonoBehaviour
 
             if (floorRenderer != null && p.position.y <= floorRenderer.transform.position.y)
             {
-                if (p.isEmitted) PaintLineOnCanvas(p.previousPosition, p.position, p.velocity.magnitude);
+                if (p.isEmitted) PaintLineOnCanvas(p.previousPosition, p.position, p.velocity.magnitude, p.color, p.colorWeight);
 
                 if (currentPaintReserve > 0f)
                 {
@@ -675,7 +734,7 @@ public class CustomSPHFluid : MonoBehaviour
         liquidMesh.RecalculateBounds();
     }
 
-    void PaintLineOnCanvas(Vector3 startWorldPos, Vector3 endWorldPos, float impactSpeed)
+    void PaintLineOnCanvas(Vector3 startWorldPos, Vector3 endWorldPos, float impactSpeed, Color particleColor, float colorWeight)
     {
         if (floorRenderer == null || canvasPixels == null) return;
 
@@ -721,19 +780,21 @@ public class CustomSPHFluid : MonoBehaviour
         int dynamicRadius = Mathf.RoundToInt(brushRadius * speedFactor * spreadMultiplier);
         if (dynamicRadius < 2) dynamicRadius = 2;
 
+        float intensity = Mathf.Clamp01(colorWeight * particleBlendStrength + impactSpeed * 0.03f);
+
         for (int i = 0; i <= steps; i++)
         {
             float lerpRatio = (float)i / steps;
             int centerX = Mathf.RoundToInt(Mathf.Lerp(x1, x2, lerpRatio));
             int centerY = Mathf.RoundToInt(Mathf.Lerp(y1, y2, lerpRatio));
 
-            ApplyBrushStamp(centerX, centerY, dynamicRadius, splatterChance);
+            ApplyBrushStamp(centerX, centerY, dynamicRadius, splatterChance, particleColor, intensity);
         }
 
         isTextureDirty = true;
     }
 
-    void ApplyBrushStamp(int centerX, int centerY, int radius, float splatterChance)
+    void ApplyBrushStamp(int centerX, int centerY, int radius, float splatterChance, Color brushColor, float intensity)
     {
         for (int x = -radius; x <= radius; x++)
         {
@@ -753,9 +814,35 @@ public class CustomSPHFluid : MonoBehaviour
                     int py = centerY + y;
                     if (px >= 0 && px < textureResolution && py >= 0 && py < textureResolution)
                     {
-                        canvasPixels[py * textureResolution + px] = paintColor32;
+                        int pixelIndex = py * textureResolution + px;
+                        Color existingColor = canvasPixels[pixelIndex];
+                        Color blendedColor = Color.Lerp(existingColor, brushColor, intensity);
+                        canvasPixels[pixelIndex] = blendedColor;
                     }
                 }
+            }
+        }
+    }
+
+    void UpdateParticleVisualColor(FluidParticle p)
+    {
+        if (p.meshRenderer == null) return;
+        particlePropertyBlock.Clear();
+        particlePropertyBlock.SetColor("_Color", p.color);
+        p.meshRenderer.SetPropertyBlock(particlePropertyBlock);
+        if (p.trailRenderer != null)
+        {
+            p.trailRenderer.material.color = p.color;
+        }
+    }
+
+    void RefreshParticleVisuals()
+    {
+        for (int i = 0; i < particles.Count; i++)
+        {
+            if (particles[i].meshRenderer != null)
+            {
+                UpdateParticleVisualColor(particles[i]);
             }
         }
     }
