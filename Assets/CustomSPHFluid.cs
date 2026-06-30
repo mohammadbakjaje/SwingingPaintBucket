@@ -26,7 +26,9 @@ public class CustomSPHFluid : MonoBehaviour
         public Transform visualTransform;
         public MeshRenderer meshRenderer; 
         public TrailRenderer trailRenderer; 
-        public bool isEmitted; 
+        public bool isEmitted;
+        public Color color;
+        public float colorWeight;
     }
 
     [Header("🎨 Canvas Material Physics & Look")]
@@ -54,16 +56,23 @@ public class CustomSPHFluid : MonoBehaviour
 
     [Header("Bucket Dimensions")]
     public Transform bucketTransform;       
+    public Transform drainPoint;            
     public float rimYOffset = 0.4f;         
     public float bucketHeight = 1.4f;       
     public float topRadius = 0.5f;          
     public float bottomRadius = 0.35f;      
-    public float drainHoleRadius = 0.08f;    
+    public float drainHoleRadius = 0.08f;   
+    public bool debugDrainDirection = false;
+    public bool debugEmitConditions = false;
 
     [Header("Stream Control")]
-    public float emissionRate = 60f;        
+    public float emissionRate = 120f;        
     public float exitVelocity = 3f;         
     private float emissionAccumulator = 0f; 
+    [Tooltip("Spacing between consecutively emitted particles along the exit direction (meters)")]
+    public float emissionSpacing = 0.00025f;
+    [Tooltip("Distance threshold for extra drain-position emissions (meters)")]
+    public float drainDistanceEmissionThreshold = 0.05f;
 
     [Header("Floor Painting")]
     public MeshRenderer floorRenderer;      
@@ -71,16 +80,24 @@ public class CustomSPHFluid : MonoBehaviour
     public int brushRadius = 7;             
 
     [Header("Unified Color Synchronization")]
-    public Color paintColor = Color.blue;   
-    public Material paintMaterial;          
+    public Color paintColor = Color.blue;
+    public Color[] paintColors = new Color[] { Color.blue };
+    [Tooltip("كم لون تريد أن تختار من القائمة")]
+    public int paintColorCount = 1;
+    [Tooltip("اختر هل يتم اختيار لون الجسيم بشكل عشوائي من الألوان المتاحة")]
+    public bool randomizePaintColors = true;
+    public Material paintMaterial;
+    public float particleBlendStrength = 0.05f;
 
     [Header("Canvas Fixes")]
     public bool invertX = false;
     public bool invertZ = false;
 
     private List<FluidParticle> particles = new List<FluidParticle>();
-    private Vector3 lastBucketPosition; 
+    private Vector3 lastBucketPosition;
+    private Vector3 lastDrainPosition;
     private Texture2D dynamicCanvasTexture; 
+    private MaterialPropertyBlock particlePropertyBlock;
     private Color32[] canvasPixels; 
     private Color32 paintColor32;
     private bool isTextureDirty = false;    
@@ -100,14 +117,46 @@ public class CustomSPHFluid : MonoBehaviour
         if (bucketTransform == null) return;
         
         smoothingRadiusSq = smoothingRadius * smoothingRadius;
+        if (paintColors == null || paintColors.Length == 0)
+        {
+            paintColors = new Color[] { paintColor };
+        }
+        paintColorCount = Mathf.Clamp(paintColorCount, 1, paintColors.Length);
         paintColor32 = paintColor;
         currentPaintReserve = totalPaintReserve;
-        lastBucketPosition = bucketTransform.position; 
+        lastBucketPosition = bucketTransform.position;
+        lastDrainPosition = drainPoint != null ? drainPoint.position : bucketTransform.TransformPoint(new Vector3(0f, -bucketHeight, 0f));
+        particlePropertyBlock = new MaterialPropertyBlock();
 
         InitializeCanvas();
         InitializeRuntimeMaterials();
         CreateProceduralLiquidObject();
         SpawnFluidParticles();
+    }
+
+    void OnValidate()
+    {
+        rimYOffset = Mathf.Max(0f, rimYOffset);
+        bucketHeight = Mathf.Max(rimYOffset + 0.01f, bucketHeight);
+        drainHoleRadius = Mathf.Max(0f, drainHoleRadius);
+
+        if (paintColors == null || paintColors.Length == 0)
+        {
+            paintColors = new Color[] { paintColor };
+        }
+        paintColorCount = Mathf.Clamp(paintColorCount, 1, Mathf.Max(1, paintColors.Length));
+    }
+
+    Color GetPaintColor()
+    {
+        if (paintColors == null || paintColors.Length == 0)
+            return paintColor;
+
+        int count = Mathf.Clamp(paintColorCount, 1, paintColors.Length);
+        if (randomizePaintColors && count > 1)
+            return paintColors[Random.Range(0, count)];
+
+        return paintColors[0];
     }
 
     void InitializeCanvas()
@@ -262,9 +311,15 @@ public class CustomSPHFluid : MonoBehaviour
         p.previousPosition = p.position;
         p.velocity = Vector3.zero;
         p.force = Vector3.zero;
-        p.isEmitted = false; 
+        p.isEmitted = false;
+        p.color = GetPaintColor();
+        p.colorWeight = 1f;
         
-        if (p.meshRenderer != null) p.meshRenderer.enabled = false;
+        if (p.meshRenderer != null)
+        {
+            p.meshRenderer.enabled = false;
+            UpdateParticleVisualColor(p);
+        }
         if (p.trailRenderer != null) { p.trailRenderer.enabled = false; p.trailRenderer.Clear(); }
         if (p.visualTransform != null) p.visualTransform.position = p.position;
     }
@@ -299,6 +354,13 @@ public class CustomSPHFluid : MonoBehaviour
             lastBucketPosition = bucketTransform.position;
         }
 
+        if (debugDrainDirection && bucketTransform != null)
+        {
+            Vector3 debugStart = drainPoint != null ? drainPoint.position : bucketTransform.position;
+            Vector3 debugDir = drainPoint != null ? drainPoint.forward : -bucketTransform.up;
+            Debug.DrawRay(debugStart, debugDir * 2f, Color.red, 0f, false);
+        }
+
         CalculateDensityAndPressure();
         CalculateForces();
         
@@ -307,6 +369,8 @@ public class CustomSPHFluid : MonoBehaviour
 
         emissionAccumulator -= emittedThisFrame * timeBetweenEmissions;
         if (emissionAccumulator < 0f) emissionAccumulator = 0f;
+
+        RefreshParticleVisuals();
     }
 
     void CalculateDensityAndPressure()
@@ -361,6 +425,24 @@ public class CustomSPHFluid : MonoBehaviour
 
                     Vector3 relativeVelocity = particles[j].velocity - p1.velocity;
                     p1.force += relativeVelocity * viscosity * rSq;
+
+                    if (distSq < smoothingRadiusSq * 0.25f)
+                    {
+                        float dist = Mathf.Sqrt(distSq);
+                        float influence = Mathf.Clamp01(1f - (dist / (smoothingRadius * 0.5f)));
+                        float blendAmount = Mathf.Clamp01(influence * 0.08f);
+                        if (blendAmount > 0f)
+                        {
+                            float totalColorWeight = Mathf.Max(0.0001f, p1.colorWeight + particles[j].colorWeight);
+                            Color neighborMix = Color.Lerp(p1.color, particles[j].color, particles[j].colorWeight / totalColorWeight);
+                            Color inverseMix = Color.Lerp(particles[j].color, p1.color, p1.colorWeight / totalColorWeight);
+                            p1.color = Color.Lerp(p1.color, neighborMix, blendAmount);
+                            particles[j].color = Color.Lerp(particles[j].color, inverseMix, blendAmount);
+                            float avgWeight = Mathf.Lerp(p1.colorWeight, particles[j].colorWeight, 0.5f);
+                            p1.colorWeight = avgWeight;
+                            particles[j].colorWeight = avgWeight;
+                        }
+                    }
                 }
             }
         }
@@ -372,7 +454,19 @@ public class CustomSPHFluid : MonoBehaviour
     {
         Vector3 bPos = bucketTransform.position;
         Quaternion bRot = bucketTransform.rotation;
+        Vector3 currentDrainPosition = drainPoint != null ? drainPoint.position : bucketTransform.TransformPoint(new Vector3(0f, -bucketHeight, 0f));
+        float distanceMoved = Vector3.Distance(currentDrainPosition, lastDrainPosition);
+        int extraIntermediateEmissions = 0;
+        if (distanceMoved > drainDistanceEmissionThreshold && drainDistanceEmissionThreshold > 0f)
+        {
+            extraIntermediateEmissions = Mathf.FloorToInt(distanceMoved / drainDistanceEmissionThreshold);
+        }
 
+        Vector3 drainLocalPosition = Vector3.zero;
+        if (drainPoint != null)
+            drainLocalPosition = Quaternion.Inverse(bRot) * (drainPoint.position - bPos);
+
+        List<FluidParticle> eligibleParticles = new List<FluidParticle>();
         for (int i = particles.Count - 1; i >= 0; i--)
         {
             FluidParticle p = particles[i];
@@ -383,7 +477,7 @@ public class CustomSPHFluid : MonoBehaviour
 
             if (floorRenderer != null && p.position.y <= floorRenderer.transform.position.y)
             {
-                if (p.isEmitted) PaintLineOnCanvas(p.previousPosition, p.position, p.velocity.magnitude);
+                if (p.isEmitted) PaintLineOnCanvas(p.previousPosition, p.position, p.velocity.magnitude, p.color, p.colorWeight);
 
                 if (currentPaintReserve > 0f)
                 {
@@ -409,10 +503,18 @@ public class CustomSPHFluid : MonoBehaviour
                     continue;
                 }
 
-                if (localPos.y > -rimYOffset) localPos.y = -rimYOffset;
+                Vector3 worldDrainPos = drainPoint != null
+                    ? drainPoint.position
+                    : bucketTransform.TransformPoint(new Vector3(0f, -bucketHeight, 0f));
+                Vector3 drainLocalPos = bucketTransform.InverseTransformPoint(worldDrainPos);
+                float rimLocalY = drainLocalPos.y + (bucketHeight - rimYOffset);
+                float bottomLocalY = drainLocalPos.y;
+
+                bool wasAboveRim = localPos.y > rimLocalY;
+                if (wasAboveRim) localPos.y = rimLocalY;
 
                 float totalSubHeight = bucketHeight - rimYOffset;
-                float currentYInsideBucket = -localPos.y - rimYOffset; 
+                float currentYInsideBucket = rimLocalY - localPos.y;
                 float t = Mathf.Clamp01(currentYInsideBucket / totalSubHeight);
                 float currentRadius = Mathf.Lerp(topRadius, bottomRadius, t);
 
@@ -438,32 +540,44 @@ public class CustomSPHFluid : MonoBehaviour
                 }
 
                 // --- التعديل الجوهري للقطرات ---
-                // التأكد من أن القطرات تخرج فقط من الثقب وباتجاه ميلان الدلو
-                if (currentPaintReserve > 0f && emittedCount < allowedEmissions)
+                // التأكد من أن القطرات تخرج فقط من الثقب وباتجاه الميلان الصحيح
+                Vector3 worldDrainPointPos = drainPoint != null ? drainPoint.position : bucketTransform.TransformPoint(new Vector3(0f, -bucketHeight, 0f));
+                Vector3 drainPointLocalPos = bucketTransform.InverseTransformPoint(worldDrainPointPos);
+                bool canEmitSpatial = drainPoint != null;
+                bool canEmitFromDrain = currentPaintReserve > 0f && !wasAboveRim && canEmitSpatial;
+
+                if (drainPoint != null)
                 {
-                    p.isEmitted = true;
-                    if (p.meshRenderer != null) p.meshRenderer.enabled = true;
+                    Vector2 localParticleXZ = new Vector2(localPos.x, localPos.z);
+                    Vector2 localDrainXZ = new Vector2(drainPointLocalPos.x, drainPointLocalPos.z);
+                    float distToDrain = Vector2.Distance(localParticleXZ, localDrainXZ);
+                    bool insideRadius = distToDrain <= drainHoleRadius * 4f; // relax horizontal tolerance
+                    bool atDrainHeight = Mathf.Abs(localPos.y - drainPointLocalPos.y) <= 0.35f; // relax vertical tolerance
+                    canEmitFromDrain &= insideRadius && atDrainHeight;
 
-                    // إزاحة القطرة قليلاً للأسفل (-0.05) لتجنب التداخل مع مجسم الدلو
-                    localPos.x = Random.Range(-drainHoleRadius, drainHoleRadius) * 0.5f;
-                    localPos.z = Random.Range(-drainHoleRadius, drainHoleRadius) * 0.5f;
-                    localPos.y = -bucketHeight - 0.05f; 
-
-                    // استخدام (-bucketTransform.up) لضمان الخروج مع اتجاه الثقب بدلاً من الأسفل المطلق للعالم
-                    Vector3 worldExitDirection = -bucketTransform.up; 
-                    p.velocity = (worldExitDirection * exitVelocity) + bucketVelocity;
-
-                    currentPaintReserve -= 1f;
-                    emittedCount++; 
-
-                    // تحديث المكان فوراً لكي لا يقوم الـ Trail برسم خط عشوائي
-                    p.position = (bRot * localPos) + bPos;
-                    if (p.visualTransform != null) p.visualTransform.position = p.position;
-
-                    if (p.trailRenderer != null) { 
-                        p.trailRenderer.enabled = true; 
-                        p.trailRenderer.Clear(); 
+                    // if particle is horizontally within drain area but not yet at drain height,
+                    // apply a small pull toward the drain so it can reach the emission zone
+                    if (insideRadius && !atDrainHeight)
+                    {
+                        Vector3 pullDir = (worldDrainPointPos - p.position).normalized;
+                        float pullStrength = 2.0f; // tuned gentle pull
+                        p.velocity += pullDir * pullStrength * dt;
+                        if (debugEmitConditions && i == 0 && Time.frameCount % 40 == 0)
+                        {
+                            Debug.Log($"[Drain Pull] applied pull towards drain, distToDrain={distToDrain:F3}, heightDiff={localPos.y - drainPointLocalPos.y:F3}");
+                        }
                     }
+
+                    if (debugEmitConditions && i == 0 && Time.frameCount % 40 == 0)
+                    {
+                        Debug.Log($"[Drain Debug] localPos={localPos}, drainLocalPos={drainLocalPos}, distToDrain={distToDrain:F3}, insideRadius={insideRadius}, atDrainHeight={atDrainHeight}, wasAboveRim={wasAboveRim}, canEmit={canEmitFromDrain}");
+                    }
+                }
+
+                if (canEmitFromDrain)
+                {
+                    // Collect eligible particle for randomized emission after the update pass
+                    eligibleParticles.Add(p);
                 }
                 else
                 {
@@ -483,9 +597,100 @@ public class CustomSPHFluid : MonoBehaviour
                 if (p.trailRenderer != null && !p.trailRenderer.enabled) p.trailRenderer.enabled = true;
             }
 
-            p.position = (bRot * localPos) + bPos;
+            if (!p.isEmitted)
+            {
+                p.position = (bRot * localPos) + bPos;
+            }
             p.visualTransform.position = p.position;
         }
+
+        // --- Emit a randomized selection of eligible particles up to the allowed emissions this frame ---
+        int remainingToEmit = Mathf.Max(0, allowedEmissions - emittedCount);
+        int emitBudget = remainingToEmit + extraIntermediateEmissions;
+        if (eligibleParticles.Count > 0 && emitBudget > 0)
+        {
+            // If not enough strictly-eligible particles, widen the search to nearby non-emitted particles
+            if (eligibleParticles.Count < emitBudget)
+            {
+                Vector3 worldDrainPointPosFill = drainPoint != null ? drainPoint.position : bucketTransform.TransformPoint(new Vector3(0f, -bucketHeight, 0f));
+                Vector3 drainLocalPosFill = bucketTransform.InverseTransformPoint(worldDrainPointPosFill);
+                for (int pi = 0; pi < particles.Count && eligibleParticles.Count < remainingToEmit; pi++)
+                {
+                    var cand = particles[pi];
+                    if (cand == null || cand.isEmitted) continue;
+                    if (eligibleParticles.Contains(cand)) continue;
+                    Vector3 candLocal = bucketTransform.InverseTransformPoint(cand.position);
+                    float dist = Vector2.Distance(new Vector2(candLocal.x, candLocal.z), new Vector2(drainLocalPosFill.x, drainLocalPosFill.z));
+                    if (dist <= drainHoleRadius * 6f && candLocal.y <= drainLocalPosFill.y + 0.5f)
+                    {
+                        eligibleParticles.Add(cand);
+                    }
+                }
+            }
+            // shuffle eligible list (Fisher-Yates)
+            for (int s = 0; s < eligibleParticles.Count; s++)
+            {
+                int k = Random.Range(s, eligibleParticles.Count);
+                var tmp = eligibleParticles[s];
+                eligibleParticles[s] = eligibleParticles[k];
+                eligibleParticles[k] = tmp;
+            }
+
+            int emits = Mathf.Min(emitBudget, eligibleParticles.Count);
+            for (int e = 0; e < emits; e++)
+            {
+                FluidParticle p = eligibleParticles[e];
+                if (p == null || p.isEmitted || currentPaintReserve <= 0f) continue;
+
+                Vector3 worldDrainPos = currentDrainPosition;
+                if (extraIntermediateEmissions > 0 && e < extraIntermediateEmissions)
+                {
+                    worldDrainPos = Vector3.Lerp(lastDrainPosition, currentDrainPosition, (float)(e + 1) / extraIntermediateEmissions);
+                }
+
+                p.isEmitted = true;
+                if (p.meshRenderer != null) p.meshRenderer.enabled = true;
+
+                Vector3 worldExitDirection = Vector3.down;
+                if (drainPoint != null)
+                {
+                    Vector3 candidateForward = drainPoint.TransformDirection(Vector3.forward).normalized;
+                    Vector3 candidateUp = drainPoint.TransformDirection(Vector3.up).normalized;
+                    Vector3 candidateDown = drainPoint.TransformDirection(Vector3.down).normalized;
+
+                    if (Vector3.Dot(candidateForward, Vector3.down) > 0.5f)
+                        worldExitDirection = candidateForward;
+                    else if (Vector3.Dot(candidateDown, Vector3.down) > 0.5f)
+                        worldExitDirection = candidateDown;
+                    else if (Vector3.Dot(candidateUp, Vector3.down) > 0.5f)
+                        worldExitDirection = candidateUp;
+                    else
+                        worldExitDirection = -bucketTransform.up;
+                }
+
+                Vector3 tangent = Vector3.Cross(worldExitDirection, Vector3.up);
+                if (tangent.sqrMagnitude < 0.001f)
+                    tangent = Vector3.Cross(worldExitDirection, bucketTransform.right);
+                tangent.Normalize();
+                Vector3 bitangent = Vector3.Cross(worldExitDirection, tangent).normalized;
+
+                float u = Random.value;
+                float r = drainHoleRadius * 0.5f * Mathf.Sqrt(u);
+                float theta = Random.value * Mathf.PI * 2f;
+                Vector3 randomPlaneOffset = tangent * (Mathf.Cos(theta) * r) + bitangent * (Mathf.Sin(theta) * r);
+
+                p.velocity = (worldExitDirection * exitVelocity) + bucketVelocity;
+                currentPaintReserve -= 1f;
+                emittedCount++;
+                float spacing = emissionSpacing;
+                p.position = worldDrainPos + randomPlaneOffset + worldExitDirection * (0.05f + e * spacing);
+
+                if (p.visualTransform != null) p.visualTransform.position = p.position;
+                if (p.trailRenderer != null) { p.trailRenderer.enabled = true; p.trailRenderer.Clear(); }
+            }
+        }
+
+        lastDrainPosition = currentDrainPosition;
     }
 
     void UpdateProceduralLiquidMesh()
@@ -529,7 +734,7 @@ public class CustomSPHFluid : MonoBehaviour
         liquidMesh.RecalculateBounds();
     }
 
-    void PaintLineOnCanvas(Vector3 startWorldPos, Vector3 endWorldPos, float impactSpeed)
+    void PaintLineOnCanvas(Vector3 startWorldPos, Vector3 endWorldPos, float impactSpeed, Color particleColor, float colorWeight)
     {
         if (floorRenderer == null || canvasPixels == null) return;
 
@@ -575,19 +780,21 @@ public class CustomSPHFluid : MonoBehaviour
         int dynamicRadius = Mathf.RoundToInt(brushRadius * speedFactor * spreadMultiplier);
         if (dynamicRadius < 2) dynamicRadius = 2;
 
+        float intensity = Mathf.Clamp01(colorWeight * particleBlendStrength + impactSpeed * 0.03f);
+
         for (int i = 0; i <= steps; i++)
         {
             float lerpRatio = (float)i / steps;
             int centerX = Mathf.RoundToInt(Mathf.Lerp(x1, x2, lerpRatio));
             int centerY = Mathf.RoundToInt(Mathf.Lerp(y1, y2, lerpRatio));
 
-            ApplyBrushStamp(centerX, centerY, dynamicRadius, splatterChance);
+            ApplyBrushStamp(centerX, centerY, dynamicRadius, splatterChance, particleColor, intensity);
         }
 
         isTextureDirty = true;
     }
 
-    void ApplyBrushStamp(int centerX, int centerY, int radius, float splatterChance)
+    void ApplyBrushStamp(int centerX, int centerY, int radius, float splatterChance, Color brushColor, float intensity)
     {
         for (int x = -radius; x <= radius; x++)
         {
@@ -607,9 +814,35 @@ public class CustomSPHFluid : MonoBehaviour
                     int py = centerY + y;
                     if (px >= 0 && px < textureResolution && py >= 0 && py < textureResolution)
                     {
-                        canvasPixels[py * textureResolution + px] = paintColor32;
+                        int pixelIndex = py * textureResolution + px;
+                        Color existingColor = canvasPixels[pixelIndex];
+                        Color blendedColor = Color.Lerp(existingColor, brushColor, intensity);
+                        canvasPixels[pixelIndex] = blendedColor;
                     }
                 }
+            }
+        }
+    }
+
+    void UpdateParticleVisualColor(FluidParticle p)
+    {
+        if (p.meshRenderer == null) return;
+        particlePropertyBlock.Clear();
+        particlePropertyBlock.SetColor("_Color", p.color);
+        p.meshRenderer.SetPropertyBlock(particlePropertyBlock);
+        if (p.trailRenderer != null)
+        {
+            p.trailRenderer.material.color = p.color;
+        }
+    }
+
+    void RefreshParticleVisuals()
+    {
+        for (int i = 0; i < particles.Count; i++)
+        {
+            if (particles[i].meshRenderer != null)
+            {
+                UpdateParticleVisualColor(particles[i]);
             }
         }
     }
@@ -634,6 +867,13 @@ public class CustomSPHFluid : MonoBehaviour
             Gizmos.DrawLine(topPt, botPt);
         }
         Gizmos.matrix = oldMatrix;
+
+        if (drainPoint != null)
+        {
+            Gizmos.color = Color.yellow;
+            Gizmos.DrawSphere(drainPoint.position, 0.03f);
+            Gizmos.DrawLine(drainPoint.position, drainPoint.position + drainPoint.forward * 0.3f);
+        }
     }
 
     void DrawWireCircle(Vector3 center, float radius)
