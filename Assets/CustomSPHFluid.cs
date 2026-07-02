@@ -1,6 +1,7 @@
 
 using UnityEngine;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 
 /// <summary>
 /// محاكي سائل SPH فائق الأداء - مع فيزياء الأسطح ومظهر المواد الحقيقي.
@@ -8,25 +9,46 @@ using System.Collections.Generic;
 /// </summary>
 public class CustomSPHFluid : MonoBehaviour
 {
-    public enum CanvasMaterialType 
-    { 
-        Cloth, 
-        Wood,  
-        Metal  
+    public enum CanvasMaterialType
+    {
+        Cloth,
+        Wood,
+        Metal
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ParticleGpuData
+    {
+        public Vector3 position;
+        public Vector3 velocity;
+        public Vector3 force;
+        public float density;
+        public float pressure;
+        public int surfaceType;
+        public int isEmitted;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ParticleRenderData
+    {
+        public Vector3 position;
+        public Vector3 scale;
+        public Vector4 color;
     }
 
     private class FluidParticle
     {
         public Vector3 position;
-        public Vector3 previousPosition; 
+        public Vector3 previousPosition;
         public Vector3 velocity;
         public Vector3 force;
         public float density;
         public float pressure;
-        public Transform visualTransform;
-        public MeshRenderer meshRenderer; 
-        public TrailRenderer trailRenderer; 
+        public int surfaceType;
         public bool isEmitted;
+        public MeshRenderer meshRenderer;
+        public TrailRenderer trailRenderer;
+        public Transform visualTransform;
         public Color color;
         public float colorWeight;
     }
@@ -34,7 +56,7 @@ public class CustomSPHFluid : MonoBehaviour
     [Header("🎨 Canvas Material Physics & Look")]
     [Tooltip("اختر نوع المادة للوحة")]
     public CanvasMaterialType surfaceMaterial = CanvasMaterialType.Cloth;
-    
+
     [Tooltip("ضع هنا صورة القماش")]
     public Texture2D clothTexture;
     [Tooltip("ضع هنا صورة الخشب")]
@@ -43,43 +65,51 @@ public class CustomSPHFluid : MonoBehaviour
     public Texture2D metalTexture;
 
     [Header("Fluid Properties")]
-    public int maxParticles = 250;          
-    public float smoothingRadius = 0.5f;    
-    public float targetDensity = 150f;      
-    public float pressureStiffness = 100f;  
-    public float viscosity = 0.2f;          
+    public int maxParticles = 10000;
+    public float smoothingRadius = 0.5f;
+    public float targetDensity = 150f;
+    public float pressureStiffness = 100f;
+    public float viscosity = 0.2f;
     public Vector3 gravity = new Vector3(0f, -9.81f, 0f);
 
+    [Header("GPU Compute & Instancing")]
+    public ComputeShader fluidComputeShader;
+    public Material particleInstancingMaterial;
+    public Mesh particleMesh;
+    public bool useGpuInstancing = true;
+    public float particleVisualScale = 0.08f;
+
     [Header("Paint Volume Control")]
-    public float totalPaintReserve = 1000f; 
-    private float currentPaintReserve;      
+    public float totalPaintReserve = 1000f;
+    private float currentPaintReserve;
 
     [Header("Bucket Dimensions")]
-    public Transform bucketTransform;       
-    public Transform drainPoint;            
-    public float rimYOffset = 0.4f;         
-    public float bucketHeight = 1.4f;       
-    public float topRadius = 0.5f;          
-    public float bottomRadius = 0.35f;      
-    public float drainHoleRadius = 0.08f;   
+    public Transform bucketTransform;
+    public Transform drainPoint;
+    public float rimYOffset = 0.4f;
+    public float bucketHeight = 1.4f;
+    public float topRadius = 0.5f;
+    public float bottomRadius = 0.35f;
+    public float drainHoleRadius = 0.08f;
     public bool debugDrainDirection = false;
     public bool debugEmitConditions = false;
 
     [Header("Stream Control")]
-    public float emissionRate = 120f;        
-    public float exitVelocity = 3f;         
-    private float emissionAccumulator = 0f; 
+    public float emissionRate = 120f;
+    public float exitVelocity = 3f;
+    private float emissionAccumulator = 0f;
     [Tooltip("Spacing between consecutively emitted particles along the exit direction (meters)")]
     public float emissionSpacing = 0.00025f;
     [Tooltip("Distance threshold for extra drain-position emissions (meters)")]
     public float drainDistanceEmissionThreshold = 0.05f;
 
     [Header("Floor Painting")]
-    public MeshRenderer floorRenderer;      
-    public int textureResolution = 1024;    
-    public int brushRadius = 7;             
+    public MeshRenderer floorRenderer;
+    public int textureResolution = 1024;
+    public int brushRadius = 7;
 
     [Header("Unified Color Synchronization")]
+    public PureMathPaintCanvas paintCanvas;
     public Color paintColor = Color.blue;
     public Color[] paintColors = new Color[] { Color.blue };
     [Tooltip("كم لون تريد أن تختار من القائمة")]
@@ -96,26 +126,34 @@ public class CustomSPHFluid : MonoBehaviour
     private List<FluidParticle> particles = new List<FluidParticle>();
     private Vector3 lastBucketPosition;
     private Vector3 lastDrainPosition;
-    private Texture2D dynamicCanvasTexture; 
+    private Texture2D dynamicCanvasTexture;
     private MaterialPropertyBlock particlePropertyBlock;
-    private Color32[] canvasPixels; 
+    private Color32[] canvasPixels;
     private Color32 paintColor32;
-    private bool isTextureDirty = false;    
+    private bool isTextureDirty = false;
 
     private Material runtimeLiquidMaterial;
     private Material runtimeParticleMaterial;
+    private ComputeBuffer particleDataBuffer;
+    private ComputeBuffer particleRenderBuffer;
+    private ComputeBuffer particleArgsBuffer;
+    private ParticleGpuData[] particleGpuData;
+    private ParticleRenderData[] particleRenderData;
+    private int densityPressureKernel = -1;
+    private int forcesKernel = -1;
+    private Bounds particleBounds = new Bounds(Vector3.zero, Vector3.one * 20f);
 
     private MeshFilter liquidMeshFilter;
     private Mesh liquidMesh;
     private Vector3[] liquidVertices;
-    private int meshSegments = 24; 
+    private int meshSegments = 24;
 
     private float smoothingRadiusSq;
 
     void Start()
     {
         if (bucketTransform == null) return;
-        
+
         smoothingRadiusSq = smoothingRadius * smoothingRadius;
         if (paintColors == null || paintColors.Length == 0)
         {
@@ -131,7 +169,9 @@ public class CustomSPHFluid : MonoBehaviour
         InitializeCanvas();
         InitializeRuntimeMaterials();
         CreateProceduralLiquidObject();
+        InitializeGpuBuffers();
         SpawnFluidParticles();
+        if (useGpuInstancing) RenderInstancedParticles();
     }
 
     void OnValidate()
@@ -162,11 +202,11 @@ public class CustomSPHFluid : MonoBehaviour
     void InitializeCanvas()
     {
         if (floorRenderer == null) return;
-        
+
         dynamicCanvasTexture = new Texture2D(textureResolution, textureResolution, TextureFormat.RGBA32, false);
         int totalPixels = textureResolution * textureResolution;
         canvasPixels = new Color32[totalPixels];
-        
+
         Texture2D selectedBaseTexture = null;
         switch (surfaceMaterial)
         {
@@ -187,12 +227,12 @@ public class CustomSPHFluid : MonoBehaviour
                 }
             }
         }
-        else 
+        else
         {
             Color32 defaultColor = new Color32(255, 255, 255, 255);
             for (int i = 0; i < totalPixels; i++) canvasPixels[i] = defaultColor;
         }
-        
+
         dynamicCanvasTexture.SetPixels32(canvasPixels);
         dynamicCanvasTexture.Apply(false);
         floorRenderer.material.mainTexture = dynamicCanvasTexture;
@@ -228,9 +268,9 @@ public class CustomSPHFluid : MonoBehaviour
         mr.sharedMaterial = runtimeLiquidMaterial;
 
         liquidMesh = new Mesh();
-        liquidMesh.MarkDynamic(); 
+        liquidMesh.MarkDynamic();
 
-        int totalVertices = meshSegments * 2 + 2; 
+        int totalVertices = meshSegments * 2 + 2;
         liquidVertices = new Vector3[totalVertices];
         List<int> triangles = new List<int>();
 
@@ -264,33 +304,56 @@ public class CustomSPHFluid : MonoBehaviour
         liquidMeshFilter.mesh = liquidMesh;
     }
 
+    void InitializeGpuBuffers()
+    {
+        int particleCount = Mathf.Min(maxParticles, 10000);
+        particleGpuData = new ParticleGpuData[particleCount];
+        particleRenderData = new ParticleRenderData[particleCount];
+        particleDataBuffer = new ComputeBuffer(particleCount, Marshal.SizeOf(typeof(ParticleGpuData)));
+        particleRenderBuffer = new ComputeBuffer(particleCount, Marshal.SizeOf(typeof(ParticleRenderData)));
+        particleArgsBuffer = new ComputeBuffer(1, 5 * sizeof(uint), ComputeBufferType.IndirectArguments);
+
+        if (fluidComputeShader != null)
+        {
+            densityPressureKernel = fluidComputeShader.FindKernel("CalculateDensityPressure");
+            forcesKernel = fluidComputeShader.FindKernel("CalculateForcesAndMove");
+        }
+
+        if (particleMesh == null)
+        {
+            particleMesh = Resources.GetBuiltinResource<Mesh>("Sphere.fbx");
+        }
+
+        if (particleInstancingMaterial == null)
+        {
+            Shader instancedShader = Shader.Find("Custom/SPHParticleInstanced");
+            if (instancedShader != null)
+            {
+                particleInstancingMaterial = new Material(instancedShader);
+            }
+        }
+
+        if (particleInstancingMaterial != null && particleMesh != null)
+        {
+            particleArgsBuffer.SetData(new uint[] { particleMesh.GetIndexCount(0), (uint)particleCount, 0, 0, 0 });
+        }
+    }
+
     void SpawnFluidParticles()
     {
-        for (int i = 0; i < maxParticles; i++)
+        int particleCount = Mathf.Min(maxParticles, 10000);
+        for (int i = 0; i < particleCount; i++)
         {
             FluidParticle p = new FluidParticle();
-            GameObject sphere = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-            sphere.name = "Paint_Drop_" + i;
-            
-            Collider builtInCollider = sphere.GetComponent<Collider>();
-            if (builtInCollider != null) Destroy(builtInCollider);
-
-            sphere.transform.localScale = Vector3.one * 0.10f; 
-            p.meshRenderer = sphere.GetComponent<MeshRenderer>();
-            p.meshRenderer.sharedMaterial = runtimeParticleMaterial;
-            p.visualTransform = sphere.transform;
-
-            p.trailRenderer = sphere.AddComponent<TrailRenderer>();
-            p.trailRenderer.time = 0.12f; 
-            p.trailRenderer.startWidth = 0.10f;
-            p.trailRenderer.endWidth = 0.03f;
-            p.trailRenderer.sharedMaterial = runtimeParticleMaterial;
-            p.trailRenderer.numCornerVertices = 4;
-            p.trailRenderer.numCapVertices = 4;
-            p.trailRenderer.enabled = false;
-            
             RespawnParticleInsideBucket(p);
+            p.surfaceType = (int)surfaceMaterial + 1;
             particles.Add(p);
+        }
+
+        SyncParticlesToGpu();
+        if (useGpuInstancing && particleInstancingMaterial != null && particleMesh != null)
+        {
+            particleInstancingMaterial.enableInstancing = true;
         }
     }
 
@@ -298,15 +361,15 @@ public class CustomSPHFluid : MonoBehaviour
     {
         float angle = Random.Range(0f, Mathf.PI * 2f);
         float h = Random.Range(-bucketHeight * 0.9f, -rimYOffset - 0.05f);
-        
+
         float totalSubHeight = bucketHeight - rimYOffset;
         float currentYInside = -h - rimYOffset;
         float t = Mathf.Clamp01(currentYInside / totalSubHeight);
         float spawnRadius = Mathf.Lerp(topRadius, bottomRadius, t) * 0.8f;
-        
+
         float r = Random.Range(0f, spawnRadius);
         Vector3 offset = bucketTransform.rotation * new Vector3(Mathf.Cos(angle) * r, h, Mathf.Sin(angle) * r);
-        
+
         p.position = bucketTransform.position + offset;
         p.previousPosition = p.position;
         p.velocity = Vector3.zero;
@@ -314,7 +377,10 @@ public class CustomSPHFluid : MonoBehaviour
         p.isEmitted = false;
         p.color = GetPaintColor();
         p.colorWeight = 1f;
-        
+        p.meshRenderer = null;
+        p.trailRenderer = null;
+        p.visualTransform = null;
+
         if (p.meshRenderer != null)
         {
             p.meshRenderer.enabled = false;
@@ -331,6 +397,11 @@ public class CustomSPHFluid : MonoBehaviour
             dynamicCanvasTexture.SetPixels32(canvasPixels);
             dynamicCanvasTexture.Apply(false);
             isTextureDirty = false;
+        }
+
+        if (useGpuInstancing && particleRenderBuffer != null)
+        {
+            RenderInstancedParticles();
         }
     }
 
@@ -361,94 +432,113 @@ public class CustomSPHFluid : MonoBehaviour
             Debug.DrawRay(debugStart, debugDir * 2f, Color.red, 0f, false);
         }
 
-        CalculateDensityAndPressure();
-        CalculateForces();
-        
-        UpdateParticlesAndCollisions(dt, bucketVelocity, allowedEmissionsThisFrame, ref emittedThisFrame);
+        RunGpuSimulation(dt, bucketVelocity, allowedEmissionsThisFrame, ref emittedThisFrame);
         UpdateProceduralLiquidMesh();
 
         emissionAccumulator -= emittedThisFrame * timeBetweenEmissions;
         if (emissionAccumulator < 0f) emissionAccumulator = 0f;
-
-        RefreshParticleVisuals();
     }
 
-    void CalculateDensityAndPressure()
+    void RunGpuSimulation(float dt, Vector3 bucketVelocity, int allowedEmissions, ref int emittedCount)
     {
-        int count = particles.Count;
+        int count = Mathf.Min(particles.Count, particleGpuData.Length);
+        if (count == 0 || fluidComputeShader == null || particleDataBuffer == null) return;
+
         for (int i = 0; i < count; i++)
         {
-            FluidParticle p1 = particles[i];
-            if (p1.isEmitted) continue;
-
-            p1.density = 0f;
-            for (int j = 0; j < count; j++)
-            {
-                if (particles[j].isEmitted) continue;
-
-                Vector3 diff = p1.position - particles[j].position;
-                float distSq = diff.sqrMagnitude; 
-
-                if (distSq < smoothingRadiusSq)
-                {
-                    float rSq = smoothingRadiusSq - distSq;
-                    p1.density += rSq * rSq * rSq; 
-                }
-            }
-            p1.pressure = pressureStiffness * (p1.density - targetDensity);
-            if (p1.pressure < 0) p1.pressure = 0;
+            FluidParticle p = particles[i];
+            particleGpuData[i].position = p.position;
+            particleGpuData[i].velocity = p.velocity;
+            particleGpuData[i].force = p.force;
+            particleGpuData[i].density = p.density;
+            particleGpuData[i].pressure = p.pressure;
+            particleGpuData[i].surfaceType = p.surfaceType;
+            particleGpuData[i].isEmitted = p.isEmitted ? 1 : 0;
         }
-    }
 
-    void CalculateForces()
-    {
-        int count = particles.Count;
+        particleDataBuffer.SetData(particleGpuData);
+
+        fluidComputeShader.SetBuffer(densityPressureKernel, "Particles", particleDataBuffer);
+        fluidComputeShader.SetInt("ParticleCount", count);
+        fluidComputeShader.SetVector("Gravity", new Vector4(gravity.x, gravity.y, gravity.z, 0f));
+        fluidComputeShader.SetFloat("TargetDensity", targetDensity);
+        fluidComputeShader.SetFloat("PressureMultiplier", pressureStiffness);
+        fluidComputeShader.SetFloat("SmoothRadius", smoothingRadius);
+        fluidComputeShader.SetFloat("DeltaTime", dt);
+        fluidComputeShader.SetFloat("Viscosity", viscosity);
+        fluidComputeShader.SetVector("BoxMin", new Vector4(-100f, -100f, -100f, 0f));
+        fluidComputeShader.SetVector("BoxMax", new Vector4(100f, 100f, 100f, 0f));
+        fluidComputeShader.Dispatch(densityPressureKernel, Mathf.CeilToInt(count / 256f), 1, 1);
+
+        fluidComputeShader.SetBuffer(forcesKernel, "Particles", particleDataBuffer);
+        fluidComputeShader.SetInt("ParticleCount", count);
+        fluidComputeShader.SetVector("Gravity", new Vector4(gravity.x, gravity.y, gravity.z, 0f));
+        fluidComputeShader.SetFloat("TargetDensity", targetDensity);
+        fluidComputeShader.SetFloat("PressureMultiplier", pressureStiffness);
+        fluidComputeShader.SetFloat("SmoothRadius", smoothingRadius);
+        fluidComputeShader.SetFloat("DeltaTime", dt);
+        fluidComputeShader.SetFloat("Viscosity", viscosity);
+        fluidComputeShader.SetVector("BoxMin", new Vector4(-100f, -100f, -100f, 0f));
+        fluidComputeShader.SetVector("BoxMax", new Vector4(100f, 100f, 100f, 0f));
+        fluidComputeShader.Dispatch(forcesKernel, Mathf.CeilToInt(count / 256f), 1, 1);
+
+        particleDataBuffer.GetData(particleGpuData);
+
         for (int i = 0; i < count; i++)
         {
-            FluidParticle p1 = particles[i];
-            p1.force = gravity;
-
-            if (p1.isEmitted) continue;
-
-            for (int j = 0; j < count; j++)
-            {
-                if (i == j || particles[j].isEmitted) continue;
-
-                Vector3 diff = p2Position(particles[j].position, p1.position);
-                float distSq = diff.sqrMagnitude;
-
-                if (distSq < smoothingRadiusSq && distSq > 0.00001f)
-                {
-                    float rSq = smoothingRadiusSq - distSq;
-                    float pressureForce = (p1.pressure + particles[j].pressure) * rSq;
-                    p1.force -= diff * pressureForce * 0.5f;
-
-                    Vector3 relativeVelocity = particles[j].velocity - p1.velocity;
-                    p1.force += relativeVelocity * viscosity * rSq;
-
-                    if (distSq < smoothingRadiusSq * 0.25f)
-                    {
-                        float dist = Mathf.Sqrt(distSq);
-                        float influence = Mathf.Clamp01(1f - (dist / (smoothingRadius * 0.5f)));
-                        float blendAmount = Mathf.Clamp01(influence * 0.08f);
-                        if (blendAmount > 0f)
-                        {
-                            float totalColorWeight = Mathf.Max(0.0001f, p1.colorWeight + particles[j].colorWeight);
-                            Color neighborMix = Color.Lerp(p1.color, particles[j].color, particles[j].colorWeight / totalColorWeight);
-                            Color inverseMix = Color.Lerp(particles[j].color, p1.color, p1.colorWeight / totalColorWeight);
-                            p1.color = Color.Lerp(p1.color, neighborMix, blendAmount);
-                            particles[j].color = Color.Lerp(particles[j].color, inverseMix, blendAmount);
-                            float avgWeight = Mathf.Lerp(p1.colorWeight, particles[j].colorWeight, 0.5f);
-                            p1.colorWeight = avgWeight;
-                            particles[j].colorWeight = avgWeight;
-                        }
-                    }
-                }
-            }
+            FluidParticle p = particles[i];
+            p.position = particleGpuData[i].position;
+            p.velocity = particleGpuData[i].velocity;
+            p.force = particleGpuData[i].force;
+            p.density = particleGpuData[i].density;
+            p.pressure = particleGpuData[i].pressure;
+            p.surfaceType = particleGpuData[i].surfaceType;
+            p.isEmitted = particleGpuData[i].isEmitted != 0;
+            particles[i] = p;
         }
+
+        UpdateParticlesAndCollisions(dt, bucketVelocity, allowedEmissions, ref emittedCount);
+        SyncParticlesToGpu();
     }
 
-    Vector3 p2Position(Vector3 p2, Vector3 p1) { return p2 - p1; }
+    void SyncParticlesToGpu()
+    {
+        if (particleDataBuffer == null || particleGpuData == null) return;
+        int count = Mathf.Min(particles.Count, particleGpuData.Length);
+        for (int i = 0; i < count; i++)
+        {
+            FluidParticle p = particles[i];
+            particleGpuData[i].position = p.position;
+            particleGpuData[i].velocity = p.velocity;
+            particleGpuData[i].force = p.force;
+            particleGpuData[i].density = p.density;
+            particleGpuData[i].pressure = p.pressure;
+            particleGpuData[i].surfaceType = p.surfaceType;
+            particleGpuData[i].isEmitted = p.isEmitted ? 1 : 0;
+        }
+
+        particleDataBuffer.SetData(particleGpuData, 0, 0, count);
+    }
+
+    void RenderInstancedParticles()
+    {
+        if (particleMesh == null || particleInstancingMaterial == null || particleRenderBuffer == null) return;
+
+        int count = Mathf.Min(particles.Count, particleGpuData.Length);
+        if (count <= 0) return;
+
+        for (int i = 0; i < count; i++)
+        {
+            FluidParticle p = particles[i];
+            particleRenderData[i].position = p.position;
+            particleRenderData[i].scale = Vector3.one * particleVisualScale;
+            particleRenderData[i].color = new Vector4(p.color.r, p.color.g, p.color.b, p.color.a);
+        }
+
+        particleRenderBuffer.SetData(particleRenderData, 0, 0, count);
+        particleInstancingMaterial.SetBuffer("_ParticleData", particleRenderBuffer);
+        Graphics.DrawMeshInstancedIndirect(particleMesh, 0, particleInstancingMaterial, particleBounds, particleArgsBuffer);
+    }
 
     void UpdateParticlesAndCollisions(float dt, Vector3 bucketVelocity, int allowedEmissions, ref int emittedCount)
     {
@@ -472,9 +562,6 @@ public class CustomSPHFluid : MonoBehaviour
             FluidParticle p = particles[i];
             p.previousPosition = p.position;
 
-            p.velocity += p.force * dt;
-            p.position += p.velocity * dt;
-
             if (floorRenderer != null && p.position.y <= floorRenderer.transform.position.y)
             {
                 if (p.isEmitted) PaintLineOnCanvas(p.previousPosition, p.position, p.velocity.magnitude, p.color, p.colorWeight);
@@ -482,13 +569,13 @@ public class CustomSPHFluid : MonoBehaviour
                 if (currentPaintReserve > 0f)
                 {
                     RespawnParticleInsideBucket(p);
-                    continue; 
+                    continue;
                 }
                 else
                 {
                     if (p.visualTransform != null) Destroy(p.visualTransform.gameObject);
                     particles.RemoveAt(i);
-                    continue; 
+                    continue;
                 }
             }
 
@@ -532,9 +619,9 @@ public class CustomSPHFluid : MonoBehaviour
                     horizontalPos = horizontalPos.normalized * currentRadius;
                     localPos.x = horizontalPos.x;
                     localPos.z = horizontalPos.y;
-                    
+
                     Vector3 localVel = Quaternion.Inverse(bRot) * p.velocity;
-                    localVel.x *= -0.1f; 
+                    localVel.x *= -0.1f;
                     localVel.z *= -0.1f;
                     p.velocity = bRot * localVel;
                 }
@@ -551,8 +638,8 @@ public class CustomSPHFluid : MonoBehaviour
                     Vector2 localParticleXZ = new Vector2(localPos.x, localPos.z);
                     Vector2 localDrainXZ = new Vector2(drainPointLocalPos.x, drainPointLocalPos.z);
                     float distToDrain = Vector2.Distance(localParticleXZ, localDrainXZ);
-                    bool insideRadius = distToDrain <= drainHoleRadius * 4f; // relax horizontal tolerance
-                    bool atDrainHeight = Mathf.Abs(localPos.y - drainPointLocalPos.y) <= 0.35f; // relax vertical tolerance
+                    bool insideRadius = distToDrain <= drainHoleRadius * 12f;
+                    bool atDrainHeight = Mathf.Abs(localPos.y - drainPointLocalPos.y) <= 1.5f;
                     canEmitFromDrain &= insideRadius && atDrainHeight;
 
                     // if particle is horizontally within drain area but not yet at drain height,
@@ -586,7 +673,7 @@ public class CustomSPHFluid : MonoBehaviour
                     {
                         localPos.y = bottomThreshold;
                         Vector3 localVel = Quaternion.Inverse(bRot) * p.velocity;
-                        localVel.y *= -0.05f; 
+                        localVel.y *= -0.05f;
                         p.velocity = bRot * localVel;
                     }
                 }
@@ -601,7 +688,7 @@ public class CustomSPHFluid : MonoBehaviour
             {
                 p.position = (bRot * localPos) + bPos;
             }
-            p.visualTransform.position = p.position;
+            if (p.visualTransform != null) p.visualTransform.position = p.position;
         }
 
         // --- Emit a randomized selection of eligible particles up to the allowed emissions this frame ---
@@ -698,7 +785,7 @@ public class CustomSPHFluid : MonoBehaviour
         if (liquidMeshFilter == null || totalPaintReserve <= 0f) return;
 
         float remainingRatio = Mathf.Clamp01(currentPaintReserve / totalPaintReserve);
-        
+
         if (remainingRatio <= 0 && particles.Count == 0)
         {
             liquidMeshFilter.gameObject.SetActive(false);
@@ -713,8 +800,8 @@ public class CustomSPHFluid : MonoBehaviour
         float currentHeight = totalHeight * remainingRatio;
         float currentTopRadius = Mathf.Lerp(bottomRadius, topRadius, remainingRatio);
 
-        liquidVertices[0] = new Vector3(0, -bucketHeight, 0); 
-        liquidVertices[1] = new Vector3(0, -bucketHeight + currentHeight, 0); 
+        liquidVertices[0] = new Vector3(0, -bucketHeight, 0);
+        liquidVertices[1] = new Vector3(0, -bucketHeight + currentHeight, 0);
 
         int botStart = 2;
         int topStart = 2 + meshSegments;
@@ -736,6 +823,21 @@ public class CustomSPHFluid : MonoBehaviour
 
     void PaintLineOnCanvas(Vector3 startWorldPos, Vector3 endWorldPos, float impactSpeed, Color particleColor, float colorWeight)
     {
+        if (paintCanvas != null)
+        {
+            Vector3 delta = endWorldPos - startWorldPos;
+            float canvasPixelDist = delta.magnitude;
+            float stepsF = Mathf.Max(1f, canvasPixelDist / Mathf.Max(1f, brushRadius * 0.4f));
+            for (int i = 0; i <= Mathf.RoundToInt(stepsF); i++)
+            {
+                float lerpRatio = (float)i / Mathf.Max(1f, stepsF);
+                Vector3 sampleWorld = Vector3.Lerp(startWorldPos, endWorldPos, lerpRatio);
+                float radiusScale = Mathf.Clamp01(impactSpeed * 0.05f + colorWeight * 0.15f + 0.15f);
+                paintCanvas.PaintAtWorldPosition(sampleWorld, particleColor, Mathf.Lerp(0.02f, brushRadius * 0.06f, radiusScale));
+            }
+            return;
+        }
+
         if (floorRenderer == null || canvasPixels == null) return;
 
         Vector3 localStart = floorRenderer.transform.InverseTransformPoint(startWorldPos);
@@ -763,16 +865,16 @@ public class CustomSPHFluid : MonoBehaviour
         switch (surfaceMaterial)
         {
             case CanvasMaterialType.Cloth:
-                spreadMultiplier = 0.6f; 
-                splatterChance = 0.1f;   
+                spreadMultiplier = 0.6f;
+                splatterChance = 0.1f;
                 break;
             case CanvasMaterialType.Wood:
-                spreadMultiplier = 1.0f; 
-                splatterChance = 0.4f;   
+                spreadMultiplier = 1.0f;
+                splatterChance = 0.4f;
                 break;
             case CanvasMaterialType.Metal:
-                spreadMultiplier = 1.7f; 
-                splatterChance = 0.8f;   
+                spreadMultiplier = 1.7f;
+                splatterChance = 0.8f;
                 break;
         }
 
@@ -807,7 +909,7 @@ public class CustomSPHFluid : MonoBehaviour
                 {
                     if (distSq / (float)radiusSq > 0.65f)
                     {
-                        if (Random.value < splatterChance) continue; 
+                        if (Random.value < splatterChance) continue;
                     }
 
                     int px = centerX + x;
@@ -845,6 +947,13 @@ public class CustomSPHFluid : MonoBehaviour
                 UpdateParticleVisualColor(particles[i]);
             }
         }
+    }
+
+    void OnDestroy()
+    {
+        if (particleDataBuffer != null) particleDataBuffer.Release();
+        if (particleRenderBuffer != null) particleRenderBuffer.Release();
+        if (particleArgsBuffer != null) particleArgsBuffer.Release();
     }
 
     void OnDrawGizmos()
