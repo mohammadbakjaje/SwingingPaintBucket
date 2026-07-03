@@ -617,14 +617,14 @@ MonoBehaviour:
   emissionSpacing: 0.005
   drainDistanceEmissionThreshold: 0.05
   floorRenderer: {fileID: 1254977205}
+  canvasRenderer: {fileID: 1254977205}
   textureResolution: 1024
   brushRadius: 3
   paintCanvas: {fileID: 0}
-  paintColor: {r: 1, g: 1, b: 1, a: 1}
-  paintColors:
-  - {r: 1, g: 0.4117647, b: 0.7058824, a: 1}
-  paintColorCount: 1
-  randomizePaintColors: 1
+  paintColor: {r: 0, g: 0, b: 0, a: 0}
+  paintColors: []
+  paintColorCount: 0
+  randomizePaintColors: 0
   paintMaterial: {fileID: 2100000, guid: 699620f7caacf804a90b89ccc9dbe25a, type: 2}
   particleBlendStrength: 0.05
   invertX: 1

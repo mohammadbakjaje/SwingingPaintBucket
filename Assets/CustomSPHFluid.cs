@@ -54,6 +54,9 @@ public class CustomSPHFluid : MonoBehaviour
     }
 
     [Header("🎨 Canvas Material Physics & Look")]
+    [Tooltip("Renderer الخاص بلوحة الرسم — عيّنه يدوياً من Inspector")]
+    public Renderer canvasRenderer;
+
     [Tooltip("اختر نوع المادة للوحة")]
     public CanvasMaterialType surfaceMaterial = CanvasMaterialType.Cloth;
 
@@ -110,12 +113,12 @@ public class CustomSPHFluid : MonoBehaviour
 
     [Header("Unified Color Synchronization")]
     public PureMathPaintCanvas paintCanvas;
-    public Color paintColor = Color.blue;
-    public Color[] paintColors = new Color[] { Color.blue };
+    public Color paintColor = Color.clear;
+    public Color[] paintColors = new Color[0];
     [Tooltip("كم لون تريد أن تختار من القائمة")]
-    public int paintColorCount = 1;
+    public int paintColorCount = 0;
     [Tooltip("اختر هل يتم اختيار لون الجسيم بشكل عشوائي من الألوان المتاحة")]
-    public bool randomizePaintColors = true;
+    public bool randomizePaintColors = false;
     public Material paintMaterial;
     public float particleBlendStrength = 0.05f;
 
@@ -131,6 +134,7 @@ public class CustomSPHFluid : MonoBehaviour
     private Color32[] canvasPixels;
     private Color32 paintColor32;
     private bool isTextureDirty = false;
+    private bool paintColorsReady = false;
 
     private Material runtimeLiquidMaterial;
     private Material runtimeParticleMaterial;
@@ -155,12 +159,12 @@ public class CustomSPHFluid : MonoBehaviour
         if (bucketTransform == null) return;
 
         smoothingRadiusSq = smoothingRadius * smoothingRadius;
-        if (paintColors == null || paintColors.Length == 0)
-        {
-            paintColors = new Color[] { paintColor };
-        }
-        paintColorCount = Mathf.Clamp(paintColorCount, 1, paintColors.Length);
-        paintColor32 = paintColor;
+        paintColorsReady = false;
+        paintColorCount = 0;
+        paintColors = new Color[0];
+        paintColor = Color.clear;
+        paintColor32 = Color.clear;
+        randomizePaintColors = false;
         currentPaintReserve = totalPaintReserve;
         lastBucketPosition = bucketTransform.position;
         lastDrainPosition = drainPoint != null ? drainPoint.position : bucketTransform.TransformPoint(new Vector3(0f, -bucketHeight, 0f));
@@ -169,6 +173,8 @@ public class CustomSPHFluid : MonoBehaviour
         InitializeCanvas();
         InitializeRuntimeMaterials();
         CreateProceduralLiquidObject();
+        if (liquidMeshFilter != null)
+            liquidMeshFilter.gameObject.SetActive(false);
         InitializeGpuBuffers();
         SpawnFluidParticles();
         if (useGpuInstancing) RenderInstancedParticles();
@@ -180,41 +186,130 @@ public class CustomSPHFluid : MonoBehaviour
         bucketHeight = Mathf.Max(rimYOffset + 0.01f, bucketHeight);
         drainHoleRadius = Mathf.Max(0f, drainHoleRadius);
 
-        if (paintColors == null || paintColors.Length == 0)
+        if (paintColors == null)
+            paintColors = new Color[0];
+        paintColorCount = Mathf.Clamp(paintColorCount, 0, Mathf.Max(0, paintColors.Length));
+    }
+
+    /// <summary>
+    /// يزيل أي لون افتراضي من الدلو حتى يختار المستخدم الألوان.
+    /// </summary>
+    public void ClearPaintColors()
+    {
+        paintColorsReady = false;
+        paintColorCount = 0;
+        paintColors = new Color[0];
+        paintColor = Color.clear;
+        paintColor32 = Color.clear;
+        randomizePaintColors = false;
+        ApplyPaintColorsToMaterials();
+        RefreshBucketParticleColors();
+    }
+
+    /// <summary>
+    /// يحدّث مجموعة ألوان الطلاء (واحد أو أكثر) فوراً.
+    /// </summary>
+    public void SetPaintColors(Color[] colors, int count)
+    {
+        if (colors == null || count <= 0)
         {
-            paintColors = new Color[] { paintColor };
+            ClearPaintColors();
+            return;
         }
-        paintColorCount = Mathf.Clamp(paintColorCount, 1, Mathf.Max(1, paintColors.Length));
+
+        paintColorCount = Mathf.Clamp(count, 1, colors.Length);
+        paintColors = new Color[paintColorCount];
+        for (int i = 0; i < paintColorCount; i++)
+            paintColors[i] = colors[i];
+
+        paintColor = paintColors[0];
+        paintColor32 = paintColor;
+        randomizePaintColors = paintColorCount > 1;
+        paintColorsReady = true;
+        ApplyPaintColorsToMaterials();
+        RefreshBucketParticleColors();
     }
 
-    Color GetPaintColor()
+    /// <summary>
+    /// يحدّث لون طلاء واحد (اختصار لـ SetPaintColors).
+    /// </summary>
+    public void SetPaintColor(Color color)
     {
-        if (paintColors == null || paintColors.Length == 0)
-            return paintColor;
-
-        int count = Mathf.Clamp(paintColorCount, 1, paintColors.Length);
-        if (randomizePaintColors && count > 1)
-            return paintColors[Random.Range(0, count)];
-
-        return paintColors[0];
+        SetPaintColors(new Color[] { color }, 1);
     }
 
-    void InitializeCanvas()
+    void ApplyPaintColorsToMaterials()
     {
-        if (floorRenderer == null) return;
+        if (!paintColorsReady)
+        {
+            if (runtimeLiquidMaterial != null)
+                runtimeLiquidMaterial.color = Color.clear;
+            if (runtimeParticleMaterial != null)
+                runtimeParticleMaterial.color = Color.clear;
+            if (liquidMeshFilter != null)
+                liquidMeshFilter.gameObject.SetActive(false);
+            return;
+        }
 
-        dynamicCanvasTexture = new Texture2D(textureResolution, textureResolution, TextureFormat.RGBA32, false);
+        Color displayColor = paintColors[0];
+        if (runtimeLiquidMaterial != null)
+            runtimeLiquidMaterial.color = displayColor;
+        if (runtimeParticleMaterial != null)
+            runtimeParticleMaterial.color = displayColor;
+        if (liquidMeshFilter != null && totalPaintReserve > 0f)
+            liquidMeshFilter.gameObject.SetActive(true);
+    }
+
+    void RefreshBucketParticleColors()
+    {
+        for (int i = 0; i < particles.Count; i++)
+        {
+            if (particles[i].isEmitted) continue;
+            particles[i].color = paintColorsReady ? GetPaintColor() : Color.clear;
+            UpdateParticleVisualColor(particles[i]);
+        }
+
+        if (useGpuInstancing)
+            RenderInstancedParticles();
+    }
+
+    /// <summary>
+    /// يغيّر مادة اللوحة فوراً دون التأثير على الدلو.
+    /// </summary>
+    public void UpdateCanvasMaterial(CanvasMaterialType materialType)
+    {
+        surfaceMaterial = materialType;
+
+        Texture2D baseTexture = GetBaseTextureForMaterial(materialType);
+        if (dynamicCanvasTexture != null && canvasPixels != null)
+            RebuildDynamicCanvasFromBase(baseTexture);
+        else
+            ApplyBaseTextureToCanvasRenderer(baseTexture);
+    }
+
+    Texture2D GetBaseTextureForMaterial(CanvasMaterialType materialType)
+    {
+        switch (materialType)
+        {
+            case CanvasMaterialType.Cloth: return clothTexture;
+            case CanvasMaterialType.Wood: return woodTexture;
+            case CanvasMaterialType.Metal: return metalTexture;
+            default: return clothTexture;
+        }
+    }
+
+    void ApplyBaseTextureToCanvasRenderer(Texture2D baseTexture)
+    {
+        Renderer target = canvasRenderer != null ? canvasRenderer : floorRenderer;
+        if (target == null || baseTexture == null) return;
+        target.material.mainTexture = baseTexture;
+    }
+
+    void RebuildDynamicCanvasFromBase(Texture2D selectedBaseTexture)
+    {
+        if (dynamicCanvasTexture == null || canvasPixels == null) return;
+
         int totalPixels = textureResolution * textureResolution;
-        canvasPixels = new Color32[totalPixels];
-
-        Texture2D selectedBaseTexture = null;
-        switch (surfaceMaterial)
-        {
-            case CanvasMaterialType.Cloth: selectedBaseTexture = clothTexture; break;
-            case CanvasMaterialType.Wood: selectedBaseTexture = woodTexture; break;
-            case CanvasMaterialType.Metal: selectedBaseTexture = metalTexture; break;
-        }
-
         if (selectedBaseTexture != null)
         {
             for (int y = 0; y < textureResolution; y++)
@@ -230,12 +325,38 @@ public class CustomSPHFluid : MonoBehaviour
         else
         {
             Color32 defaultColor = new Color32(255, 255, 255, 255);
-            for (int i = 0; i < totalPixels; i++) canvasPixels[i] = defaultColor;
+            for (int i = 0; i < totalPixels; i++)
+                canvasPixels[i] = defaultColor;
         }
 
         dynamicCanvasTexture.SetPixels32(canvasPixels);
         dynamicCanvasTexture.Apply(false);
-        floorRenderer.material.mainTexture = dynamicCanvasTexture;
+
+        Renderer paintTarget = canvasRenderer != null ? canvasRenderer : floorRenderer;
+        if (paintTarget != null)
+            paintTarget.material.mainTexture = dynamicCanvasTexture;
+    }
+
+    Color GetPaintColor()
+    {
+        if (!paintColorsReady || paintColors == null || paintColors.Length == 0)
+            return Color.clear;
+
+        int count = Mathf.Clamp(paintColorCount, 1, paintColors.Length);
+        if (randomizePaintColors && count > 1)
+            return paintColors[Random.Range(0, count)];
+
+        return paintColors[0];
+    }
+
+    void InitializeCanvas()
+    {
+        Renderer canvasTarget = canvasRenderer != null ? canvasRenderer : floorRenderer;
+        if (canvasTarget == null) return;
+
+        dynamicCanvasTexture = new Texture2D(textureResolution, textureResolution, TextureFormat.RGBA32, false);
+        canvasPixels = new Color32[textureResolution * textureResolution];
+        RebuildDynamicCanvasFromBase(GetBaseTextureForMaterial(surfaceMaterial));
     }
 
     void InitializeRuntimeMaterials()
@@ -251,8 +372,8 @@ public class CustomSPHFluid : MonoBehaviour
             runtimeLiquidMaterial = new Material(defaultShader);
             runtimeParticleMaterial = new Material(defaultShader);
         }
-        runtimeLiquidMaterial.color = paintColor;
-        runtimeParticleMaterial.color = paintColor;
+        runtimeLiquidMaterial.color = Color.clear;
+        runtimeParticleMaterial.color = Color.clear;
     }
 
     void CreateProceduralLiquidObject()
@@ -414,9 +535,8 @@ public class CustomSPHFluid : MonoBehaviour
         int allowedEmissionsThisFrame = Mathf.FloorToInt(emissionAccumulator / timeBetweenEmissions);
         int emittedThisFrame = 0;
 
-        paintColor32 = paintColor;
-        if (runtimeLiquidMaterial != null) runtimeLiquidMaterial.color = paintColor;
-        if (runtimeParticleMaterial != null) runtimeParticleMaterial.color = paintColor;
+        if (paintColorsReady)
+            ApplyPaintColorsToMaterials();
 
         Vector3 bucketVelocity = Vector3.zero;
         if (dt > 0f && bucketTransform != null)
@@ -556,13 +676,16 @@ public class CustomSPHFluid : MonoBehaviour
         if (drainPoint != null)
             drainLocalPosition = Quaternion.Inverse(bRot) * (drainPoint.position - bPos);
 
+        Renderer canvasTarget = GetCanvasRenderer();
+        float canvasSurfaceY = canvasTarget != null ? canvasTarget.transform.position.y : float.MinValue;
+
         List<FluidParticle> eligibleParticles = new List<FluidParticle>();
         for (int i = particles.Count - 1; i >= 0; i--)
         {
             FluidParticle p = particles[i];
             p.previousPosition = p.position;
 
-            if (floorRenderer != null && p.position.y <= floorRenderer.transform.position.y)
+            if (canvasTarget != null && p.position.y <= canvasSurfaceY)
             {
                 if (p.isEmitted) PaintLineOnCanvas(p.previousPosition, p.position, p.velocity.magnitude, p.color, p.colorWeight);
 
@@ -782,7 +905,7 @@ public class CustomSPHFluid : MonoBehaviour
 
     void UpdateProceduralLiquidMesh()
     {
-        if (liquidMeshFilter == null || totalPaintReserve <= 0f) return;
+        if (liquidMeshFilter == null || totalPaintReserve <= 0f || !paintColorsReady) return;
 
         float remainingRatio = Mathf.Clamp01(currentPaintReserve / totalPaintReserve);
 
@@ -791,10 +914,9 @@ public class CustomSPHFluid : MonoBehaviour
             liquidMeshFilter.gameObject.SetActive(false);
             return;
         }
-        else
-        {
-            if (!liquidMeshFilter.gameObject.activeSelf) liquidMeshFilter.gameObject.SetActive(true);
-        }
+
+        if (!liquidMeshFilter.gameObject.activeSelf)
+            liquidMeshFilter.gameObject.SetActive(true);
 
         float totalHeight = bucketHeight - rimYOffset;
         float currentHeight = totalHeight * remainingRatio;
@@ -821,6 +943,11 @@ public class CustomSPHFluid : MonoBehaviour
         liquidMesh.RecalculateBounds();
     }
 
+    Renderer GetCanvasRenderer()
+    {
+        return canvasRenderer != null ? canvasRenderer : floorRenderer;
+    }
+
     void PaintLineOnCanvas(Vector3 startWorldPos, Vector3 endWorldPos, float impactSpeed, Color particleColor, float colorWeight)
     {
         if (paintCanvas != null)
@@ -838,10 +965,11 @@ public class CustomSPHFluid : MonoBehaviour
             return;
         }
 
-        if (floorRenderer == null || canvasPixels == null) return;
+        Renderer canvasTarget = GetCanvasRenderer();
+        if (canvasTarget == null || canvasPixels == null) return;
 
-        Vector3 localStart = floorRenderer.transform.InverseTransformPoint(startWorldPos);
-        Vector3 localEnd = floorRenderer.transform.InverseTransformPoint(endWorldPos);
+        Vector3 localStart = canvasTarget.transform.InverseTransformPoint(startWorldPos);
+        Vector3 localEnd = canvasTarget.transform.InverseTransformPoint(endWorldPos);
 
         float u1 = (localStart.x + 5f) / 10f;
         float v1 = (localStart.z + 5f) / 10f;

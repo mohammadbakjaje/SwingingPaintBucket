@@ -27,10 +27,11 @@ public class RuntimeUIManager : MonoBehaviour
     private Canvas mainCanvas;
     private GameObject setupMenuPanel;
     private GameObject runtimeSettingsButton;
-    private Dictionary<string, Slider> sliderDictionary = new Dictionary<string, Slider>();
-    private Dictionary<string, TextMeshProUGUI> labelDictionary = new Dictionary<string, TextMeshProUGUI>();
-    private List<Color> selectedPaintColors = new List<Color>();
     private bool simulationStarted = false;
+
+    private int desiredColorCount = 1;
+    private readonly List<Color> selectedColors = new List<Color>();
+    private readonly Dictionary<Color, Outline> colorSelectionOutlines = new Dictionary<Color, Outline>();
 
     void Start()
     {
@@ -43,6 +44,9 @@ public class RuntimeUIManager : MonoBehaviour
         // Build Setup Menu (appears first, pauses simulation)
         BuildSetupMenu();
 
+        if (fluidSimulation != null)
+            fluidSimulation.ClearPaintColors();
+
         // Pause simulation until user clicks Start
         Time.timeScale = 0f;
         simulationStarted = false;
@@ -50,16 +54,9 @@ public class RuntimeUIManager : MonoBehaviour
 
     void Update()
     {
-        // Allow ESC to return to menu during simulation
         if (simulationStarted && Input.GetKeyDown(KeyCode.Escape))
         {
             ReturnToMenu();
-        }
-
-        // Update slider labels in real-time
-        if (simulationStarted)
-        {
-            UpdateSliderLabels();
         }
     }
 
@@ -169,38 +166,6 @@ public class RuntimeUIManager : MonoBehaviour
 
         AddSeparator(contentPanel);
 
-        // Section 4: Physical Settings
-        AddSectionHeader(contentPanel, "Physics Settings");
-        if (pendulumController != null)
-        {
-            AddSlider(contentPanel,
-                "Gravity",
-                Mathf.Abs(pendulumController.gravity.y),
-                1f, 20f,
-                (value) =>
-                {
-                    // Update both pendulum and fluid gravity
-                    Vector3 newGravity = new Vector3(0f, -value, 0f);
-                    pendulumController.gravity = newGravity;
-                    if (fluidSimulation != null)
-                    {
-                        fluidSimulation.gravity = newGravity;
-                    }
-                });
-        }
-
-        if (fluidSimulation != null)
-        {
-            AddSlider(contentPanel,
-                "Viscosity",
-                fluidSimulation.viscosity,
-                0f, 1f,
-                (value) =>
-                {
-                    fluidSimulation.viscosity = value;
-                });
-        }
-
         // Spacing before buttons
         AddSpacer(contentPanel, 20);
 
@@ -278,12 +243,12 @@ public class RuntimeUIManager : MonoBehaviour
         containerLayout.childForceExpandHeight = false;
         containerLayout.spacing = 5f;
 
-        // Label with value using TextMeshProUGUI
+        // Label
         GameObject labelObj = new GameObject("Label");
         labelObj.transform.SetParent(sliderContainer.transform, false);
 
         TextMeshProUGUI labelText = labelObj.AddComponent<TextMeshProUGUI>();
-        labelText.text = label + ": " + initialValue.ToString("F2");
+        labelText.text = label;
         labelText.fontSize = 16;
         labelText.alignment = TextAlignmentOptions.BottomRight;
         labelText.color = textColor;
@@ -348,34 +313,30 @@ public class RuntimeUIManager : MonoBehaviour
 
         slider.handleRect = handleRect;
 
-        // Hook up value change - directly calls the callback and updates UI
         slider.onValueChanged.AddListener((value) =>
         {
             onValueChanged?.Invoke(value);
-            labelText.text = label + ": " + value.ToString("F2");
         });
-
-        sliderDictionary[label] = slider;
-        labelDictionary[label] = labelText;
     }
 
     /// <summary>
-    /// Adds color selection buttons - directly updates fluidSimulation.paintColor
+    /// Adds color count selector and multi-color palette buttons.
     /// </summary>
     private void AddColorSelector(GameObject parent)
     {
-        // Initialize selected colors list with first color
-        selectedPaintColors.Clear();
-        if (fluidSimulation != null && fluidSimulation.paintColors.Length > 0)
-        {
-            selectedPaintColors.Add(fluidSimulation.paintColors[0]);
-        }
-        else
-        {
-            selectedPaintColors.Add(Color.blue);
-        }
+        AddSlider(parent,
+            "Number of Colors",
+            desiredColorCount,
+            1f, 6f,
+            (value) =>
+            {
+                desiredColorCount = Mathf.RoundToInt(value);
+                while (selectedColors.Count > desiredColorCount)
+                    selectedColors.RemoveAt(selectedColors.Count - 1);
+                UpdateColorSelectionVisuals();
+                SyncPaintColorsToSimulation();
+            });
 
-        // Create color grid (3 columns)
         List<Color> colorPalette = new List<Color>
         {
             new Color(1f, 0.2f, 0.2f, 1f),    // Red
@@ -386,7 +347,6 @@ public class RuntimeUIManager : MonoBehaviour
             new Color(1f, 0.6f, 0.2f, 1f),    // Orange
         };
 
-        // Container for color buttons
         GameObject colorGrid = new GameObject("ColorGrid");
         colorGrid.transform.SetParent(parent.transform, false);
         RectTransform gridRect = colorGrid.AddComponent<RectTransform>();
@@ -402,14 +362,54 @@ public class RuntimeUIManager : MonoBehaviour
         grid.spacing = new Vector2(10, 10);
         grid.cellSize = new Vector2(150, 35);
 
+        colorSelectionOutlines.Clear();
         foreach (Color color in colorPalette)
         {
             AddColorButton(colorGrid, color);
         }
     }
 
+    private void ToggleColorSelection(Color color)
+    {
+        if (selectedColors.Contains(color))
+        {
+            selectedColors.Remove(color);
+        }
+        else if (desiredColorCount == 1)
+        {
+            selectedColors.Clear();
+            selectedColors.Add(color);
+        }
+        else if (selectedColors.Count < desiredColorCount)
+        {
+            selectedColors.Add(color);
+        }
+
+        UpdateColorSelectionVisuals();
+        SyncPaintColorsToSimulation();
+    }
+
+    private void UpdateColorSelectionVisuals()
+    {
+        foreach (var kvp in colorSelectionOutlines)
+        {
+            if (kvp.Value != null)
+                kvp.Value.enabled = selectedColors.Contains(kvp.Key);
+        }
+    }
+
+    private void SyncPaintColorsToSimulation()
+    {
+        if (fluidSimulation == null) return;
+
+        if (selectedColors.Count == 0)
+            fluidSimulation.ClearPaintColors();
+        else
+            fluidSimulation.SetPaintColors(selectedColors.ToArray(), selectedColors.Count);
+    }
+
     /// <summary>
-    /// Adds a single color button - directly updates fluidSimulation paintColor properties
+    /// Adds a single color button with multi-select support.
     /// </summary>
     private void AddColorButton(GameObject parent, Color color)
     {
@@ -419,6 +419,12 @@ public class RuntimeUIManager : MonoBehaviour
         Image buttonImage = buttonObj.AddComponent<Image>();
         buttonImage.color = color;
 
+        Outline selectionOutline = buttonObj.AddComponent<Outline>();
+        selectionOutline.effectColor = Color.white;
+        selectionOutline.effectDistance = new Vector2(3f, -3f);
+        selectionOutline.enabled = false;
+        colorSelectionOutlines[color] = selectionOutline;
+
         Button button = buttonObj.AddComponent<Button>();
         ColorBlock colors = button.colors;
         colors.normalColor = color;
@@ -427,23 +433,7 @@ public class RuntimeUIManager : MonoBehaviour
         button.colors = colors;
         button.targetGraphic = buttonImage;
 
-        // Direct binding to fluidSimulation.paintColor
-        button.onClick.AddListener(() =>
-        {
-            if (fluidSimulation != null)
-            {
-                // Update both the primary paint color and the color array
-                fluidSimulation.paintColor = color;
-                
-                // Update the paintColors array first element
-                if (fluidSimulation.paintColors != null && fluidSimulation.paintColors.Length > 0)
-                {
-                    fluidSimulation.paintColors[0] = color;
-                }
-
-                Debug.Log("Paint Color Updated to: " + color.ToString());
-            }
-        });
+        button.onClick.AddListener(() => ToggleColorSelection(color));
     }
 
     /// <summary>
@@ -481,11 +471,7 @@ public class RuntimeUIManager : MonoBehaviour
             AddCanvasTypeButton(canvasGrid, canvasTypes[i], primaryColor, () =>
             {
                 if (fluidSimulation != null)
-                {
-                    // Directly update the surfaceMaterial property
-                    fluidSimulation.surfaceMaterial = materialTypes[index];
-                    Debug.Log("Canvas Material Updated to: " + materialTypes[index]);
-                }
+                    fluidSimulation.UpdateCanvasMaterial(materialTypes[index]);
             });
         }
     }
@@ -621,20 +607,6 @@ public class RuntimeUIManager : MonoBehaviour
         simulationStarted = false;
 
         Debug.Log("Returned to Setup Menu");
-    }
-
-    /// <summary>
-    /// Updates slider labels with current values
-    /// </summary>
-    private void UpdateSliderLabels()
-    {
-        foreach (var kvp in sliderDictionary)
-        {
-            if (labelDictionary.ContainsKey(kvp.Key))
-            {
-                labelDictionary[kvp.Key].text = kvp.Key + ": " + kvp.Value.value.ToString("F2");
-            }
-        }
     }
 
     /// <summary>
