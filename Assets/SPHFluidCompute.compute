@@ -1,0 +1,123 @@
+#pragma kernel CalculateDensityPressure
+#pragma kernel CalculateForcesAndMove
+
+// هيكل بيانات الجزيء (يجب أن يطابق تماماً ما سنكتبه في الـ C#)
+struct Particle
+{
+    float3 position;
+    float3 velocity;
+    float3 force;
+    float density;
+    float pressure;
+    int surfaceType; // 1 = Cloth, 2 = Wood, 3 = Metal
+    int isEmitted;
+};
+
+// الحوافظ المتبادلة بين كارت الشاشة والمعالج (RWStructuredBuffer)
+RWStructuredBuffer<Particle> Particles;
+
+// المتغيرات الثابتة للمحاكاة
+int ParticleCount;
+float3 Gravity;
+float TargetDensity;
+float PressureMultiplier;
+float SmoothRadius;
+float DeltaTime;
+float Viscosity;
+
+// حدود التصادم (كمثال بسيط للدلو أو الغرفة)
+float3 BoxMin;
+float3 BoxMax;
+
+// 1. الكيرنل الأول: حساب الكثافة والضغط لكل جزيء
+[numthreads(256, 1, 1)]
+void CalculateDensityPressure(uint3 id : SV_DispatchThreadID)
+{
+    if ((int)id.x >= ParticleCount) return;
+
+    Particle p1 = Particles[id.x];
+    float3 p1_pos = p1.position;
+    float density = 0.0f;
+    float radiusSq = SmoothRadius * SmoothRadius;
+
+    // دورتين متقاطعتين O(N^2) سريعة جداً على الـ GPU
+    for (int j = 0; j < ParticleCount; j++)
+    {
+        float3 diff = Particles[j].position - p1_pos;
+        float rSq = dot(diff, diff);
+
+        if (rSq < radiusSq)
+        {
+            // دالة تقريب ناعمة مبسطة للكثافة
+            float r = sqrt(rSq);
+            float influence = SmoothRadius - r;
+            density += influence * influence * influence; 
+        }
+    }
+
+    Particles[id.x].density = max(density, 0.001f);
+    // معادلة الحالة للضغط (Tait's Equation مبسطة)
+    Particles[id.x].pressure = PressureMultiplier * (Particles[id.x].density - TargetDensity);
+}
+
+// 2. الكيرنل الثاني: حساب القوى وتحريك الجزيئات والتصادم
+[numthreads(256, 1, 1)]
+void CalculateForcesAndMove(uint3 id : SV_DispatchThreadID)
+{
+    if ((int)id.x >= ParticleCount) return;
+
+    Particle p1 = Particles[id.x];
+    float3 pressureForce = float3(0, 0, 0);
+    float3 viscosityForce = float3(0, 0, 0);
+    float radiusSq = SmoothRadius * SmoothRadius;
+
+    for (int j = 0; j < ParticleCount; j++)
+    {
+        if ((int)id.x == j) continue;
+
+        Particle p2 = Particles[j];
+        if (p2.isEmitted != 0) continue;
+
+        float3 diff = p2.position - p1.position;
+        float rSq = dot(diff, diff);
+
+        if (rSq < radiusSq && rSq > 0.0001f)
+        {
+            float r = sqrt(rSq);
+            float3 dir = diff / r;
+            float influence = SmoothRadius - r;
+
+            // حساب قوة الضغط المتبادلة بين الجزيئين
+            float sharedPressure = (p1.pressure + p2.pressure) * 0.5f;
+            pressureForce -= dir * sharedPressure * influence;
+            float3 relativeVelocity = p2.velocity - p1.velocity;
+            viscosityForce += relativeVelocity * Viscosity * influence;
+        }
+    }
+
+    // إضافة الجاذبية الأرضية بشكل واضح ومسيطر
+    float3 sphAcceleration = (pressureForce + viscosityForce) / max(p1.density, 0.001f);
+    sphAcceleration = clamp(sphAcceleration, -1.5f, 1.5f);
+    float3 totalAcceleration = Gravity + sphAcceleration * 0.02f;
+
+    // التكامل الفيزيائي (تحريك الجزيء بناء على القوة)
+    p1.velocity += totalAcceleration * DeltaTime;
+    p1.position += p1.velocity * DeltaTime;
+    p1.force = totalAcceleration;
+
+    // --- منطق التصادم البسيط مع الحدود ---
+    float bounce = 0.1f; // ارتداد خفيف جداً لتجنب التثبيت
+    if (p1.surfaceType == 1) bounce = 0.05f; // قماش (امتصاص)
+    if (p1.surfaceType == 2) bounce = 0.12f; // خشب
+    if (p1.surfaceType == 3) bounce = 0.18f; // معدن (ارتداد قليل)
+
+    if (p1.position.x < BoxMin.x) { p1.position.x = BoxMin.x; p1.velocity.x *= -bounce; }
+    if (p1.position.x > BoxMax.x) { p1.position.x = BoxMax.x; p1.velocity.x *= -bounce; }
+    if (p1.position.y < BoxMin.y) { p1.position.y = BoxMin.y; p1.velocity.y *= -bounce; }
+    if (p1.position.y > BoxMax.y) { p1.position.y = BoxMax.y; p1.velocity.y *= -bounce; }
+    if (p1.position.z < BoxMin.z) { p1.position.z = BoxMin.z; p1.velocity.z *= -bounce; }
+    if (p1.position.z > BoxMax.z) { p1.position.z = BoxMax.z; p1.velocity.z *= -bounce; }
+
+    // حفظ التعديلات في البافر الرئيسي
+    Particles[id.x] = p1;
+}
