@@ -529,7 +529,7 @@ MonoBehaviour:
   smoothingRadius: 0.5
   targetDensity: 150
   pressureStiffness: 60
-  viscosity: 0.5
+  viscosity: 1
   gravity: {x: 0, y: -9.81, z: 0}
   totalPaintReserve: 10000000
   bucketTransform: {fileID: 519937688}
@@ -541,6 +541,11 @@ MonoBehaviour:
   drainHoleRadius: 0.2
   debugDrainDirection: 1
   debugEmitConditions: 1
+  bucketParent: {fileID: 519937688}
+  containerCylinder: {fileID: 358570774}
+  gravityFollowsContainer: 0
+  useCylinderContainment: 1
+  wallBounciness: 0.1
   emissionRate: 100
   exitVelocity: -3
   emissionSpacing: 0.005
@@ -747,7 +752,7 @@ MonoBehaviour:
   ropeLength: 5
   ropeWidth: 0.04
   gravity: {x: 0, y: -9.81, z: 0}
-  airResistance: 0.02
+  airResistance: 0.196
   torsionSpringK: 25
   torsionDampingB: 1
   bucketTransform: {fileID: 519937688}
